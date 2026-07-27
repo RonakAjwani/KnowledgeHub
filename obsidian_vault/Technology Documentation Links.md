@@ -133,6 +133,11 @@ Qdrant *server* is pinned to **v1.15.1** in `docker-compose.yml` and **confirmed
 3. **Starlette 1.3.1 renamed two status constants.** `HTTP_413_REQUEST_ENTITY_TOO_LARGE` → `HTTP_413_CONTENT_TOO_LARGE`, `HTTP_422_UNPROCESSABLE_ENTITY` → `HTTP_422_UNPROCESSABLE_CONTENT`. Old names still work but emit `StarletteDeprecationWarning`.
 4. **FastAPI's default 422 collides with the error taxonomy.** FastAPI returns 422 for request-validation failures, but §6 reserves 422 for `document_not_ready`. `app/errors.py` remaps `RequestValidationError` to 400 `invalid_request`; without that, "your JSON is malformed" and "your document is still embedding" are indistinguishable to a client.
 
+### API findings — 2026-07-28, Phase 2
+
+5. **`fastembed` 0.8.0 exposes `token_count` publicly** — `TextEmbedding.token_count(texts, batch_size=1024) -> int`. So chunk sizing uses the same tokenizer that produces the vectors, rather than an approximation of it. `TextEmbedding(model_name=..., cache_dir=..., threads=1)`; `lazy_load=True` also exists if startup RSS becomes a problem on Render. Quantized `bge-small-en-v1.5` is **64 MB on disk** once cached.
+6. ⚠️ **Windows: fastembed's HuggingFace download hits `WinError 1314` (symlink privilege) unless Developer Mode is on.** It retries, falls back to copying, and succeeds — so it is noise rather than a blocker, but the first load is slow and logs two red ERROR lines that look worse than they are. Linux and the Docker image are unaffected. If it becomes annoying locally, enable Windows Developer Mode.
+
 ### Open gaps in this note — 2026-07-27
 
 Flagged rather than filled, because guessing a URL is the same mistake as guessing an API. Three matter; the rest of the blanks are fine.

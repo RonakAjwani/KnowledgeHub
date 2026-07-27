@@ -1,0 +1,215 @@
+"""Tier-1 PDF parsing, against real generated PDFs.
+
+Fixtures are authored rather than committed as binaries, so each test states what
+the document actually contains and a parser regression reads as a behaviour
+change instead of a diff against an opaque blob.
+
+The case that matters most is the ruled table. Naive extraction turns a revenue
+table into a stream of numbers, and that failure is worse than a crash because it
+*looks* like success: the numbers get embedded as prose, retrieve for nothing, and
+nobody notices until an answer cites a column header as a sentence.
+"""
+
+from __future__ import annotations
+
+import io
+
+import pytest
+
+from app.ingest.chunk import chunk_document
+from app.ingest.crossref import resolve_cross_references
+from app.ingest.normalize import build_normalized_text
+from app.ingest.parse import UnsupportedDocument, parse_document
+from app.models.schemas import BlockType
+
+reportlab = pytest.importorskip("reportlab")
+
+from reportlab.lib.pagesizes import letter  # noqa: E402
+from reportlab.pdfgen import canvas  # noqa: E402
+
+from app.config import Settings  # noqa: E402
+
+CFG = Settings(child_tokens=120, parent_tokens=400)
+
+
+@pytest.fixture(autouse=True)
+def _no_model(monkeypatch):
+    from app.ingest import tokens
+
+    monkeypatch.setattr(tokens, "get_embedding_model", lambda: None)
+
+
+def _draw_table(c, x, y, rows, col_width=110, row_height=20):
+    """A table with real ruling lines, which is what find_tables() keys on."""
+    width = col_width * len(rows[0])
+    for r, row in enumerate(rows):
+        top = y - r * row_height
+        c.line(x, top, x + width, top)
+        for i, cell in enumerate(row):
+            c.drawString(x + i * col_width + 4, top - 14, str(cell))
+    c.line(x, y - len(rows) * row_height, x + width, y - len(rows) * row_height)
+    for i in range(len(rows[0]) + 1):
+        c.line(x + i * col_width, y, x + i * col_width, y - len(rows) * row_height)
+
+
+def make_report_pdf() -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(72, 720, "Quarterly Financial Report")
+
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 690, "This report summarises revenue across all business segments.")
+    c.drawString(72, 674, "Revenue reached $8M in Q3, as Table 1 shows.")
+
+    c.drawString(72, 640, "Table 1: Quarterly revenue by segment")
+    _draw_table(
+        c,
+        72,
+        625,
+        [
+            ["quarter", "revenue", "segment"],
+            ["Q1", "5200000", "cloud"],
+            ["Q2", "6400000", "cloud"],
+            ["Q3", "8000000", "cloud"],
+        ],
+    )
+
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 500, "Growth was driven primarily by enterprise contracts.")
+
+    c.showPage()
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(72, 720, "Outlook")
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 690, "We expect continued expansion in the next fiscal year.")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+# ------------------------------------------------------------------- parsing
+
+
+def test_parses_multi_page_pdf() -> None:
+    result = parse_document(make_report_pdf(), "application/pdf")
+    assert result.page_count == 2
+    assert result.blocks
+
+
+def test_table_is_recovered_as_an_atomic_block_not_flattened_prose() -> None:
+    """The whole reason Tier 1 uses pdfplumber rather than raw text extraction."""
+    result = parse_document(make_report_pdf(), "application/pdf")
+    tables = [b for b in result.blocks if b.block_type is BlockType.TABLE]
+
+    assert len(tables) == 1, "the ruled table should be found exactly once"
+    body = tables[0].text
+    assert body.startswith("|"), "table should render as markdown"
+    assert "quarter" in body and "revenue" in body, "header row must survive"
+    assert "8000000" in body, "cell values must survive"
+
+    # And the numbers must not also appear as loose prose.
+    prose = " ".join(b.text for b in result.blocks if b.block_type is BlockType.PROSE)
+    assert "5200000" not in prose
+
+
+def test_headings_are_detected_and_scope_the_section_path() -> None:
+    result = parse_document(make_report_pdf(), "application/pdf")
+    sections = {b.section for b in result.blocks if b.section}
+    assert "Quarterly Financial Report" in sections
+    assert "Outlook" in sections
+
+
+def test_page_numbers_are_recorded() -> None:
+    result = parse_document(make_report_pdf(), "application/pdf")
+    pages = {b.page for b in result.blocks}
+    assert pages == {1, 2}
+
+
+def test_reading_order_keeps_prose_around_its_table() -> None:
+    """A table's explanation usually sits directly above or below it; emitting
+    all prose then all tables would separate them."""
+    result = parse_document(make_report_pdf(), "application/pdf")
+    types = [b.block_type for b in result.blocks]
+    table_at = types.index(BlockType.TABLE)
+
+    before = " ".join(b.text for b in result.blocks[:table_at])
+    after = " ".join(b.text for b in result.blocks[table_at + 1 :])
+    assert "Table 1" in before
+    assert "enterprise contracts" in after
+
+
+def test_empty_pdf_fails_loudly_rather_than_indexing_nothing() -> None:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    c.showPage()
+    c.save()
+
+    with pytest.raises(UnsupportedDocument, match="No extractable text"):
+        parse_document(buf.getvalue(), "application/pdf")
+
+
+def test_corrupt_bytes_fail_loudly() -> None:
+    with pytest.raises(UnsupportedDocument):
+        parse_document(b"this is not a pdf", "application/pdf")
+
+
+# ------------------------------------------------------ full chain on a PDF
+
+
+def test_offsets_survive_the_whole_pdf_chain() -> None:
+    """parse -> normalize -> crossref -> chunk, with the citation chain intact."""
+    result = parse_document(make_report_pdf(), "application/pdf")
+    doc = build_normalized_text(result.blocks)
+    refs = resolve_cross_references(doc)
+    chunks = chunk_document(
+        doc, doc_id="d1", user_id="u1", references=refs, settings=CFG
+    )
+
+    assert chunks
+    for chunk in chunks:
+        sliced = doc.text[chunk.char_start : chunk.char_end]
+        assert sliced.strip(), "chunk points at empty text"
+        assert doc.text[chunk.parent_char_start : chunk.parent_char_end] == chunk.parent_text
+        assert chunk.parent_char_start <= chunk.char_start
+        assert chunk.parent_char_end >= chunk.char_end
+
+
+def test_table_in_a_pdf_gets_the_authors_narrative_as_its_lead_line() -> None:
+    """End to end: the caption and the referencing sentence both come from the
+    document, so the table is findable without a model inventing a description."""
+    result = parse_document(make_report_pdf(), "application/pdf")
+    doc = build_normalized_text(result.blocks)
+    refs = resolve_cross_references(doc)
+    chunks = chunk_document(
+        doc, doc_id="d1", user_id="u1", references=refs, settings=CFG
+    )
+
+    table_chunk = next(c for c in chunks if c.chunk_type is BlockType.TABLE)
+    assert "Quarterly revenue by segment" in table_chunk.text  # rung 1: caption
+    assert "Revenue reached $8M" in table_chunk.text  # rung 2: narrative
+    assert "8000000" in table_chunk.text  # rung 3: cells
+    assert table_chunk.is_derived is False  # no model involved
+
+
+def test_table_citation_span_covers_the_table_only() -> None:
+    result = parse_document(make_report_pdf(), "application/pdf")
+    doc = build_normalized_text(result.blocks)
+    refs = resolve_cross_references(doc)
+    chunks = chunk_document(
+        doc, doc_id="d1", user_id="u1", references=refs, settings=CFG
+    )
+
+    table_chunk = next(c for c in chunks if c.chunk_type is BlockType.TABLE)
+    span = doc.text[table_chunk.char_start : table_chunk.char_end]
+    assert span.lstrip().startswith("|")
+    assert "Revenue reached $8M" not in span
+
+
+def test_complexity_assessment_runs_on_every_page() -> None:
+    """The Tier-2 escalation signal — a local heuristic, never a model."""
+    result = parse_document(make_report_pdf(), "application/pdf")
+    assert len(result.assessments) == 2
+    # A clean born-digital page with a readable table needs no escalation.
+    assert result.complex_pages == []

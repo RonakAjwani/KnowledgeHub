@@ -42,6 +42,10 @@ pytest-asyncio = ">=0.24,<2.0"
 deepeval = ">=1.0,<4.0"
 ruff = ">=0.6,<1.0"
 mypy = ">=1.11,<2.0"
+# Authors the PDF fixtures the Tier-1 parser is tested against. Generating them
+# beats committing binaries: the test states what the document contains, so a
+# parser regression is legible rather than a diff against an opaque blob.
+reportlab = ">=4.2,<5.0"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
