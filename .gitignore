@@ -1,0 +1,43 @@
+# Environments — nothing installs globally, and nothing installed is committed
+backend/.venv/
+frontend/node_modules/
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# fastembed / HuggingFace model cache — downloaded at runtime, never committed
+.fastembed_cache/
+backend/.fastembed_cache/
+.cache/
+
+# Ronak's eval corpus — supplied locally, not part of the repo
+corpus/
+
+# Local data volumes
+qdrant_storage/
+pgdata/
+
+# Eval output
+evals/results/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

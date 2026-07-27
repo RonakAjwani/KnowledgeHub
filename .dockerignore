@@ -1,0 +1,30 @@
+# A host .venv or node_modules copied into a Linux image carries the wrong
+# platform wheels/binaries and breaks the build in a way that is annoying to
+# diagnose. Keep them out of the build context entirely.
+backend/.venv/
+frontend/node_modules/
+node_modules/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+.next/
+out/
+
+.git/
+.github/
+
+.env
+.env.*
+!.env.example
+
+# Not needed at runtime — the design record and the local corpus
+obsidian_vault/
+corpus/
+evals/results/
+qdrant_storage/
+pgdata/
+.fastembed_cache/

@@ -1,0 +1,393 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1720 1400" width="1720" height="1400" font-family="Inter, 'Segoe UI', system-ui, sans-serif">
+
+  <!-- ============================================================
+       KnowledgeHub — Architecture Diagram
+       LIVE DOCUMENT. Update this file when architecture changes.
+
+       Layout contract (keep consistent when editing):
+         main column ... x =   40 ..1180
+         right rail  ... x = 1220 ..1680
+         bands       ... 1 Client 2 API 3 Ingest 4 Query 5 Data 6 Ops
+       Band transitions use off-page connectors ("from (2)") rather
+       than long routed lines, to keep the graph readable.
+       ============================================================ -->
+
+  <defs>
+    <style>
+      .band      { fill:#FFFFFF; stroke:#DADCE0; stroke-width:1.5; rx:10; }
+      .bandlabel { font-size:12px; font-weight:700; letter-spacing:.09em; fill:#5F6368; }
+      .t         { font-size:12.5px; font-weight:600; fill:#202124; }
+      .d         { font-size:10.5px; fill:#5F6368; }
+      .m         { font-size:10px; fill:#3C4043; font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace; }
+      .edge      { font-size:9.5px; fill:#5F6368; font-style:italic; }
+      .conn      { font-size:10px; font-weight:600; fill:#1A73E8; }
+      .warn      { font-size:10px; fill:#C5221F; font-weight:600; }
+
+      .n-client  { fill:#E8F0FE; stroke:#1A73E8; stroke-width:1.5; rx:7; }
+      .n-api     { fill:#EDE7F6; stroke:#6A3AB2; stroke-width:1.5; rx:7; }
+      .n-proc    { fill:#FFFFFF; stroke:#6A3AB2; stroke-width:1.5; rx:7; }
+      .n-data    { fill:#E6F4EA; stroke:#1E8E3E; stroke-width:1.5; rx:7; }
+      .n-ext     { fill:#FEF7E0; stroke:#E37400; stroke-width:1.5; rx:7; }
+      .n-guard   { fill:#FCE8E6; stroke:#C5221F; stroke-width:1.8; rx:7; }
+      .n-ops     { fill:#F1F3F4; stroke:#5F6368; stroke-width:1.5; rx:7; }
+
+      .flow      { stroke:#3C4043; stroke-width:1.8; fill:none; }
+      .flow-a    { stroke:#1E8E3E; stroke-width:1.6; fill:none; stroke-dasharray:6 4; }
+      .flow-r    { stroke:#C5221F; stroke-width:1.6; fill:none; stroke-dasharray:5 4; }
+    </style>
+
+    <marker id="a"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3C4043"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1E8E3E"/></marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#C5221F"/></marker>
+  </defs>
+
+  <rect width="1720" height="1400" fill="#FAFAFA"/>
+
+  <!-- ================= TITLE ================= -->
+  <text x="40" y="42" font-size="22" font-weight="700" fill="#202124">KnowledgeHub — Multi-Document RAG Assistant with Chat Memory</text>
+  <text x="40" y="63" class="d" font-size="11.5">Architecture draft v1 · 2026-07-27 · bounded-CRAG retrieval over user-uploaded documents · all tiers free unless noted</text>
+
+  <!-- ================= BAND 1 · CLIENT ================= -->
+  <rect class="band" x="40" y="88" width="1140" height="132"/>
+  <text x="58" y="110" class="bandlabel">1 · CLIENT — Next.js + TS + shadcn/Tailwind — Vercel (free)</text>
+
+  <rect class="n-client" x="60" y="122" width="260" height="82"/>
+  <text x="76" y="143" class="t">Chat Pane</text>
+  <text x="76" y="160" class="d">Streaming answer + inline [n] chips</text>
+  <text x="76" y="175" class="d">Retrieval step indicator</text>
+  <text x="76" y="192" class="m">EventSource / SSE</text>
+
+  <rect class="n-guard" x="340" y="122" width="260" height="82"/>
+  <text x="356" y="143" class="t">Source Pane  ·  G5</text>
+  <text x="356" y="160" class="d">Original doc always visible</text>
+  <text x="356" y="175" class="d">Click chip → scroll + highlight span</text>
+  <text x="356" y="192" class="m">uses char_start / char_end</text>
+
+  <rect class="n-client" x="620" y="122" width="260" height="82"/>
+  <text x="636" y="143" class="t">Document Manager</text>
+  <text x="636" y="160" class="d">Upload · status · delete</text>
+  <text x="636" y="175" class="d">Per-source checkboxes</text>
+  <text x="636" y="192" class="m">→ scopes retrieval filter</text>
+
+  <rect class="n-client" x="900" y="122" width="260" height="82"/>
+  <text x="916" y="143" class="t">Clerk Session</text>
+  <text x="916" y="160" class="d">Hosted sign-in UI</text>
+  <text x="916" y="175" class="d">Attaches JWT to every request</text>
+  <text x="916" y="192" class="m">@clerk/nextjs</text>
+
+  <!-- ================= BAND 2 · API ================= -->
+  <rect class="band" x="40" y="244" width="1140" height="112"/>
+  <text x="58" y="266" class="bandlabel">2 · API — FastAPI on Render (512 MB RAM · 0.1 vCPU · sleeps after 15 min idle)</text>
+
+  <rect class="n-api" x="60" y="278" width="300" height="62"/>
+  <text x="76" y="299" class="t">JWT Verification</text>
+  <text x="76" y="316" class="m">clerk-backend-api  →  user_id</text>
+  <text x="76" y="331" class="d">Injected into every query + payload filter</text>
+
+  <rect class="n-api" x="380" y="278" width="380" height="62"/>
+  <text x="396" y="299" class="t">REST + SSE Endpoints</text>
+  <text x="396" y="316" class="m">/documents  /documents/{id}/status  /chat</text>
+  <text x="396" y="331" class="d">Typed error envelope · timeout + fallback on every dep</text>
+
+  <rect class="n-api" x="780" y="278" width="380" height="62"/>
+  <text x="796" y="299" class="t">LLM Adapter  (swappable)</text>
+  <text x="796" y="316" class="m">LLM_PROVIDER = gemini | anthropic | groq</text>
+  <text x="796" y="331" class="d">Provider swap is config, never code</text>
+
+  <path class="flow" marker-end="url(#a)" d="M 300 340 L 300 372"/>
+  <text x="310" y="362" class="edge">POST /documents</text>
+
+  <!-- ================= BAND 3 · INGEST ================= -->
+  <rect class="band" x="40" y="376" width="1140" height="188"/>
+  <text x="58" y="398" class="bandlabel">3 · INGEST PIPELINE — async worker · progress pushed to client over SSE</text>
+
+  <rect class="n-proc" x="60" y="416" width="145" height="120"/>
+  <text x="72" y="437" class="t">Upload</text>
+  <text x="72" y="454" class="d">PDF / txt / md</text>
+  <text x="72" y="469" class="d">Store original</text>
+  <text x="72" y="484" class="d">blob for source</text>
+  <text x="72" y="499" class="d">pane rendering</text>
+  <text x="72" y="521" class="m">status: queued</text>
+
+  <rect class="n-proc" x="219" y="416" width="145" height="120"/>
+  <text x="231" y="437" class="t">Parse</text>
+  <text x="231" y="454" class="d">Structure-aware</text>
+  <text x="231" y="469" class="d">loaders keep</text>
+  <text x="231" y="484" class="d">headings, pages,</text>
+  <text x="231" y="499" class="d">layout blocks</text>
+  <text x="231" y="521" class="m">status: parsing</text>
+
+  <rect class="n-guard" x="378" y="416" width="145" height="120"/>
+  <text x="390" y="437" class="t">Sanitize  ·  G3</text>
+  <text x="390" y="454" class="d">Strip zero-width</text>
+  <text x="390" y="469" class="d">chars, invisible /</text>
+  <text x="390" y="484" class="d">0-opacity text, HTML</text>
+  <text x="390" y="499" class="d">comments, PDF</text>
+  <text x="390" y="514" class="d">annotation layers</text>
+  <text x="390" y="531" class="warn">untrusted input</text>
+
+  <rect class="n-proc" x="537" y="416" width="145" height="120"/>
+  <text x="549" y="437" class="t">Chunk</text>
+  <text x="549" y="454" class="d">Parent / child</text>
+  <text x="549" y="469" class="d">child → indexed</text>
+  <text x="549" y="484" class="d">parent → sent to LLM</text>
+  <text x="549" y="506" class="m">records</text>
+  <text x="549" y="521" class="m">char_start/end</text>
+
+  <rect class="n-proc" x="696" y="416" width="145" height="120"/>
+  <text x="708" y="437" class="t">Dedup</text>
+  <text x="708" y="454" class="d">Deterministic id =</text>
+  <text x="708" y="469" class="d">sha256(doc|idx|text)</text>
+  <text x="708" y="491" class="d">Re-upload is a</text>
+  <text x="708" y="506" class="d">no-op, never a</text>
+  <text x="708" y="521" class="d">duplicate vector</text>
+
+  <rect class="n-proc" x="855" y="416" width="145" height="120"/>
+  <text x="867" y="437" class="t">Embed</text>
+  <text x="867" y="454" class="d">fastembed, in-process</text>
+  <text x="867" y="476" class="m">bge-small-en-v1.5</text>
+  <text x="867" y="491" class="m">quantized ONNX</text>
+  <text x="867" y="513" class="d">Chosen to fit the</text>
+  <text x="867" y="528" class="d">512 MB ceiling</text>
+
+  <rect class="n-proc" x="1014" y="416" width="146" height="120"/>
+  <text x="1026" y="437" class="t">Upsert</text>
+  <text x="1026" y="454" class="d">Dense + sparse in</text>
+  <text x="1026" y="469" class="d">one Qdrant point</text>
+  <text x="1026" y="491" class="d">Chunk row mirrored</text>
+  <text x="1026" y="506" class="d">to Postgres for</text>
+  <text x="1026" y="521" class="d">citation resolution</text>
+
+  <path class="flow" marker-end="url(#a)" d="M 205 476 L 217 476"/>
+  <path class="flow" marker-end="url(#a)" d="M 364 476 L 376 476"/>
+  <path class="flow" marker-end="url(#a)" d="M 523 476 L 535 476"/>
+  <path class="flow" marker-end="url(#a)" d="M 682 476 L 694 476"/>
+  <path class="flow" marker-end="url(#a)" d="M 841 476 L 853 476"/>
+  <path class="flow" marker-end="url(#a)" d="M 1000 476 L 1012 476"/>
+
+  <path class="flow" marker-end="url(#a)" d="M 1087 536 L 1087 570 L 640 570 L 640 1000"/>
+  <text x="1097" y="556" class="edge">writes to 5 · Data Layer</text>
+
+  <!-- ================= BAND 4 · QUERY ================= -->
+  <rect class="band" x="40" y="586" width="1140" height="392"/>
+  <text x="58" y="608" class="bandlabel">4 · QUERY PIPELINE — LangGraph state graph · bounded CRAG · hard cap of one corrective retry</text>
+  <text x="58" y="628" class="conn">◀ entry: from 2 · POST /chat  (user turn + conversation state)</text>
+
+  <!-- row 1 -->
+  <rect class="n-guard" x="60" y="690" width="150" height="80"/>
+  <text x="72" y="711" class="t">Route  ·  G1</text>
+  <text x="72" y="728" class="d">Topical / scope gate</text>
+  <text x="72" y="743" class="d">Tuned loose —</text>
+  <text x="72" y="758" class="d">over-refusal is worse</text>
+
+  <rect class="n-proc" x="230" y="690" width="160" height="80"/>
+  <text x="242" y="711" class="t">Rewrite</text>
+  <text x="242" y="728" class="d">Resolve coreference</text>
+  <text x="242" y="743" class="d">by verbatim substitution</text>
+  <text x="242" y="758" class="d">— never paraphrase</text>
+
+  <rect class="n-proc" x="410" y="690" width="250" height="80"/>
+  <text x="422" y="711" class="t">Hybrid Retrieve  —  single server-side call</text>
+  <text x="422" y="728" class="m">prefetch[dense, sparse] + rrf(weights=[wd, ws])</text>
+  <text x="422" y="743" class="d">Qdrant native weighted RRF (v1.14+)</text>
+  <text x="422" y="758" class="d">payload filter: user_id + selected doc_ids</text>
+
+  <rect class="n-proc" x="680" y="690" width="160" height="80"/>
+  <text x="692" y="711" class="t">Rerank</text>
+  <text x="692" y="728" class="d">Cross-encoder, top-40 → 5</text>
+  <text x="692" y="743" class="d">Conditional: skipped when</text>
+  <text x="692" y="758" class="d">fusion margin is decisive</text>
+
+  <rect class="n-guard" x="860" y="690" width="150" height="80"/>
+  <text x="872" y="711" class="t">Grade  ·  G2</text>
+  <text x="872" y="728" class="d">Relevance floor from</text>
+  <text x="872" y="743" class="d">rerank score — no extra</text>
+  <text x="872" y="758" class="d">LLM grading calls</text>
+
+  <!-- row 2 -->
+  <rect class="n-proc" x="60" y="840" width="150" height="80"/>
+  <text x="72" y="861" class="t">Refuse / Clarify</text>
+  <text x="72" y="878" class="d">Out of corpus scope</text>
+  <text x="72" y="893" class="d">or underspecified</text>
+
+  <rect class="n-proc" x="230" y="840" width="160" height="80"/>
+  <text x="242" y="861" class="t">Answer from History</text>
+  <text x="242" y="878" class="d">No retrieval needed</text>
+  <text x="242" y="893" class="d">"summarise that", "thanks"</text>
+
+  <rect class="n-guard" x="410" y="840" width="250" height="80"/>
+  <text x="422" y="861" class="t">Assemble Prompt + Generate  ·  G3</text>
+  <text x="422" y="878" class="d">Chunks wrapped in delimited DATA blocks;</text>
+  <text x="422" y="893" class="d">delimiter escaped in chunk text so content</text>
+  <text x="422" y="908" class="d">cannot break out. Emits inline [n] markers.</text>
+
+  <rect class="n-guard" x="680" y="840" width="160" height="80"/>
+  <text x="692" y="861" class="t">Verify  ·  G4</text>
+  <text x="692" y="878" class="d">Claim-level, vs union</text>
+  <text x="692" y="893" class="d">of cited chunks</text>
+  <text x="692" y="908" class="warn">async — off request path</text>
+
+  <rect class="n-proc" x="860" y="840" width="150" height="80"/>
+  <text x="872" y="861" class="t">Abstain</text>
+  <text x="872" y="878" class="d">"Not in your documents"</text>
+  <text x="872" y="893" class="d">Structured refusal,</text>
+  <text x="872" y="908" class="d">never a guess</text>
+
+  <!-- row-1 edges -->
+  <path class="flow" marker-end="url(#a)" d="M 210 730 L 228 730"/>
+  <text x="196" y="682" class="edge">needs retrieval</text>
+  <path class="flow" marker-end="url(#a)" d="M 390 730 L 408 730"/>
+  <path class="flow" marker-end="url(#a)" d="M 660 730 L 678 730"/>
+  <path class="flow" marker-end="url(#a)" d="M 840 730 L 858 730"/>
+
+  <!-- route branches -->
+  <path class="flow" marker-end="url(#a)" d="M 135 770 L 135 838"/>
+  <text x="143" y="808" class="edge">out of scope</text>
+  <path class="flow" marker-end="url(#a)" d="M 210 762 L 220 762 L 220 880 L 228 880"/>
+  <text x="150" y="836" class="edge">history suffices</text>
+
+  <!-- grade outcomes -->
+  <path class="flow" marker-end="url(#a)" d="M 890 770 L 890 805 L 535 805 L 535 838"/>
+  <text x="700" y="799" class="edge">pass — evidence above floor</text>
+  <path class="flow" marker-end="url(#a)" d="M 960 770 L 960 838"/>
+  <text x="968" y="808" class="edge">retry also failed</text>
+
+  <!-- retry edge -->
+  <path class="flow-r" marker-end="url(#ar)" d="M 935 690 L 935 655 L 310 655 L 310 688"/>
+  <text x="560" y="649" class="warn">corrective retry — hard cap ×1, then abstain</text>
+
+  <!-- row-2 edges -->
+  <path class="flow" marker-end="url(#a)" d="M 390 880 L 408 880"/>
+  <path class="flow-a" marker-end="url(#ag)" d="M 660 880 L 678 880"/>
+
+  <text x="60" y="952" class="conn">▶ exit: to 1 · SSE token stream — answer streams immediately; G4 verdicts patch citation chips in after</text>
+
+  <!-- ================= BAND 5 · DATA ================= -->
+  <rect class="band" x="40" y="1000" width="1140" height="196"/>
+  <text x="58" y="1022" class="bandlabel">5 · DATA LAYER</text>
+
+  <rect class="n-data" x="60" y="1038" width="420" height="140"/>
+  <text x="76" y="1059" class="t">Qdrant Cloud  —  free tier</text>
+  <text x="76" y="1076" class="d">1 GB RAM · 4 GB disk · 0.5 vCPU · single node</text>
+  <text x="76" y="1098" class="m">collection: chunks</text>
+  <text x="76" y="1114" class="m">  named vectors: dense + sparse(BM25)</text>
+  <text x="76" y="1130" class="m">  payload: user_id, doc_id, chunk_idx,</text>
+  <text x="76" y="1145" class="m">           page, section, char_start, char_end</text>
+  <text x="76" y="1167" class="d">Sparse vectors + payload filtering both free-tier</text>
+
+  <rect class="n-data" x="500" y="1038" width="420" height="140"/>
+  <text x="516" y="1059" class="t">PostgreSQL  —  Render free</text>
+  <text x="516" y="1076" class="d">1 GB · expires after 30 days — fine for the assessment window</text>
+  <text x="516" y="1098" class="m">users · documents · chunks (mirror)</text>
+  <text x="516" y="1114" class="m">conversations · messages</text>
+  <text x="516" y="1130" class="m">message_citations (chunk_id, rank, score, verified)</text>
+  <text x="516" y="1146" class="m">rolling_summary · entity_ledger</text>
+  <text x="516" y="1167" class="d">entity_ledger doubles as the coreference source for Rewrite</text>
+
+  <rect class="n-data" x="940" y="1038" width="220" height="140"/>
+  <text x="956" y="1059" class="t">Object Store</text>
+  <text x="956" y="1076" class="d">Original uploaded files</text>
+  <text x="956" y="1098" class="d">Required for the source</text>
+  <text x="956" y="1113" class="d">pane to render the</text>
+  <text x="956" y="1128" class="d">document and highlight</text>
+  <text x="956" y="1143" class="d">the cited span</text>
+
+  <!-- ================= BAND 6 · OPS ================= -->
+  <rect class="band" x="40" y="1216" width="1140" height="122"/>
+  <text x="58" y="1238" class="bandlabel">6 · OPS &amp; CI</text>
+
+  <rect class="n-ops" x="60" y="1252" width="340" height="68"/>
+  <text x="76" y="1273" class="t">GitHub Actions</text>
+  <text x="76" y="1290" class="m">DeepEval — pytest-native, fails the build</text>
+  <text x="76" y="1306" class="d">Gates on faithfulness + retrieval regression</text>
+
+  <rect class="n-ops" x="420" y="1252" width="340" height="68"/>
+  <text x="436" y="1273" class="t">Docker Compose</text>
+  <text x="436" y="1290" class="d">Committed local-dev + deployment fallback</text>
+  <text x="436" y="1306" class="d">Kept in parity with deployed setup — must not drift</text>
+
+  <rect class="n-ops" x="780" y="1252" width="380" height="68"/>
+  <text x="796" y="1273" class="t">Uptime Pinger</text>
+  <text x="796" y="1290" class="d">Render free spins down at 15 min idle (~60 s cold start)</text>
+  <text x="796" y="1306" class="d">Sub-15-min ping keeps the demo warm</text>
+
+  <!-- ================= RIGHT RAIL ================= -->
+
+  <rect class="n-ext" x="1220" y="244" width="460" height="112"/>
+  <text x="1238" y="266" class="bandlabel">EXTERNAL · AUTH</text>
+  <text x="1238" y="292" class="t">Clerk</text>
+  <text x="1238" y="309" class="d">Hosted sign-in; JWT verified server-side</text>
+  <text x="1238" y="326" class="m">clerk-backend-api  (officially documented)</text>
+  <text x="1238" y="345" class="d">user_id scopes every Postgres row and Qdrant payload filter</text>
+
+  <!-- guardrail legend -->
+  <rect class="n-guard" x="1220" y="376" width="460" height="188"/>
+  <text x="1238" y="398" class="bandlabel" fill="#C5221F">GUARDRAIL LAYERS</text>
+  <text x="1238" y="422" class="t">G1 · Topical gate</text>
+  <text x="1238" y="437" class="d">Pre-retrieval scope check. Tuned loose — over-refusal on benign queries is the worse failure.</text>
+  <text x="1238" y="459" class="t">G2 · Relevance floor</text>
+  <text x="1238" y="474" class="d">Refuse before generating if evidence is weak. Doubles as the CRAG grader and abstention trigger.</text>
+  <text x="1238" y="496" class="t">G3 · Data-not-instructions</text>
+  <text x="1238" y="511" class="d">Ingest sanitation + delimited prompt blocks. Uploaded documents are an untrusted input channel.</text>
+  <text x="1238" y="533" class="t">G4 · Output verification</text>
+  <text x="1238" y="548" class="d">Claim-level citation check, run async.  <tspan font-weight="600" fill="#202124">G5 · Source pane</tspan> — user verifies in one click.</text>
+
+  <rect class="n-ext" x="1220" y="586" width="460" height="212"/>
+  <text x="1238" y="608" class="bandlabel">EXTERNAL · LLM PROVIDERS</text>
+  <text x="1238" y="632" class="d">All reached through the adapter in band 2. Swapping is an env change.</text>
+  <text x="1238" y="660" class="t">Gemini — AI Studio free tier</text>
+  <text x="1238" y="676" class="d">Flash / Flash-Lite. Primary during development and testing.</text>
+  <text x="1238" y="700" class="t">Anthropic Claude — paid</text>
+  <text x="1238" y="716" class="d">Optional final pass before demo recording (~$10 budget).</text>
+  <text x="1238" y="740" class="t">Groq — free tier</text>
+  <text x="1238" y="756" class="d">Alternative final pass. Limits are per-organisation, not per-key.</text>
+  <text x="1238" y="782" class="d">Roles: routing + rewrite → fastest model · generation → strongest available · judges → off request path</text>
+
+  <rect class="n-ext" x="1220" y="820" width="460" height="158"/>
+  <text x="1238" y="842" class="bandlabel">EXTERNAL · RERANK</text>
+  <text x="1238" y="866" class="t">Cohere Rerank  —  trial key</text>
+  <text x="1238" y="883" class="m">1,000 calls / month  ·  10 req / min</text>
+  <text x="1238" y="905" class="warn">Budget constraint drives two design choices:</text>
+  <text x="1238" y="922" class="d">1. Conditional rerank — skip when the fused top-1 margin is decisive</text>
+  <text x="1238" y="938" class="d">2. Cache rerank results per (query_hash, doc_set)</text>
+  <text x="1238" y="960" class="d">Fallback chain: Cohere → cached → fused order (logged, never a hard fail)</text>
+
+  <!-- legend -->
+  <rect class="band" x="1220" y="1000" width="460" height="196"/>
+  <text x="1238" y="1022" class="bandlabel">LEGEND</text>
+
+  <rect class="n-client" x="1238" y="1036" width="26" height="16"/>
+  <text x="1274" y="1049" class="d">Client / UI</text>
+  <rect class="n-api"    x="1238" y="1060" width="26" height="16"/>
+  <text x="1274" y="1073" class="d">API surface</text>
+  <rect class="n-proc"   x="1238" y="1084" width="26" height="16"/>
+  <text x="1274" y="1097" class="d">Pipeline node (in-process on Render)</text>
+  <rect class="n-guard"  x="1238" y="1108" width="26" height="16"/>
+  <text x="1274" y="1121" class="d">Guardrail — the differentiating surface</text>
+  <rect class="n-data"   x="1238" y="1132" width="26" height="16"/>
+  <text x="1274" y="1145" class="d">Persistent store</text>
+  <rect class="n-ext"    x="1238" y="1156" width="26" height="16"/>
+  <text x="1274" y="1169" class="d">Third-party service</text>
+
+  <path class="flow"   marker-end="url(#a)"  d="M 1490 1044 L 1536 1044"/>
+  <text x="1546" y="1048" class="d">synchronous</text>
+  <path class="flow-a" marker-end="url(#ag)" d="M 1490 1074 L 1536 1074"/>
+  <text x="1546" y="1078" class="d">async / off request path</text>
+  <path class="flow-r" marker-end="url(#ar)" d="M 1490 1104 L 1536 1104"/>
+  <text x="1546" y="1108" class="d">corrective retry (capped)</text>
+  <text x="1490" y="1140" class="conn">◀ ▶</text>
+  <text x="1546" y="1140" class="d">off-page connector</text>
+
+  <!-- constraints -->
+  <rect class="band" x="1220" y="1216" width="460" height="122"/>
+  <text x="1238" y="1238" class="bandlabel">BINDING CONSTRAINTS</text>
+  <text x="1238" y="1262" class="d"><tspan font-weight="600" fill="#202124">512 MB / 0.1 vCPU</tspan> — rules out bge-base and bge-m3 in-process,</text>
+  <text x="1238" y="1277" class="d">and rules out any local cross-encoder. Rerank must be remote.</text>
+  <text x="1238" y="1298" class="d"><tspan font-weight="600" fill="#202124">Every external dep</tspan> has a timeout and a named fallback.</text>
+  <text x="1238" y="1313" class="d">Degradation is always logged and surfaced — a fallback must never</text>
+  <text x="1238" y="1328" class="d">be indistinguishable from a healthy path.</text>
+
+</svg>

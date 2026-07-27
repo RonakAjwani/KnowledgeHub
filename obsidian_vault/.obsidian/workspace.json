@@ -1,0 +1,212 @@
+{
+  "main": {
+    "id": "0519e2022cde8a6f",
+    "type": "split",
+    "children": [
+      {
+        "id": "61a69d813aebd8ae",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "2607c21924ba66dc",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Technology Documentation Links.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Technology Documentation Links"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "d68ce023d4e15f3f",
+    "type": "split",
+    "children": [
+      {
+        "id": "6f5b452dbaa9240b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b22f022b55fc2a38",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "ec988f8abb2e111e",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "6b78ddb3ad1366b0",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "42b14f251d552ad3",
+    "type": "split",
+    "children": [
+      {
+        "id": "107e5be6d73d9370",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "e4dfb7e308269907",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks"
+            }
+          },
+          {
+            "id": "cae69255f77559d1",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links"
+            }
+          },
+          {
+            "id": "b881480aa056cb8a",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "0fd56a44a2352948",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "9bc3b71021a5673d",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "2607c21924ba66dc",
+  "lastOpenFiles": [
+    "Technology Documentation Links.md.tmp.348.54eafa759fbe",
+    "KnowledgeHub Index.md.tmp.348.e0ce3294e565",
+    "KnowledgeHub Stack Decisions.md.tmp.348.fcc8f34853b6",
+    "Technology Documentation Links.md",
+    "Technology Documentation Links.md.tmp.348.1e178d7079f5",
+    "Open Verification Questions.md",
+    "Retrieval Pipeline Contract.md.tmp.5500.6f52d9cd096e",
+    "Retrieval Pipeline Contract.md.tmp.5500.ecfcd219ba69",
+    "Retrieval Pipeline Contract.md.tmp.5500.e15cf16996e6",
+    "Retrieval Pipeline Contract.md.tmp.5500.e5957770e95f",
+    "Confirmed Infrastructure Constraints.md.tmp.5500.18c97e3140da",
+    "Confirmed Infrastructure Constraints.md.tmp.5500.74beba4223b7",
+    "KnowledgeHub Index.md.tmp.5500.1b9f65fdd236",
+    "Document Parsing And Complex PDFs.md",
+    "Retrieval Pipeline Contract.md",
+    "Confirmed Infrastructure Constraints.md",
+    "RAG Guardrails Design.md",
+    "Hybrid Retrieval Research.md",
+    "KnowledgeHub Assignment Requirements.md",
+    "KnowledgeHub Stack Decisions.md",
+    "Multi Turn Memory Architecture.md",
+    "RAG Techniques Evaluated.md",
+    "Agentic RAG Decision.md",
+    "NotebookRAG Reference Project.md",
+    "KnowledgeHub Index.md",
+    "Welcome.md"
+  ]
+}
