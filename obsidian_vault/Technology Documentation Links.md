@@ -148,6 +148,15 @@ Qdrant *server* is pinned to **v1.15.1** in `docker-compose.yml` and **confirmed
    - Current model IDs carry **no date suffix**: `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5`.
 8. **Ruff's `ASYNC109` is a false positive for httpx-based clients.** It flags any async function taking a `timeout` parameter, assuming it hand-rolls `asyncio.timeout()`. Delegating to httpx is better — separate connect/read/write budgets — and the contract's §5 table is expressed as per-dependency timeouts, so the parameter *is* the interface. Ignored project-wide with that reason recorded in `pyproject.toml`.
 
+### API findings — 2026-07-28, Phase 2c
+
+9. ⚠️ **The Qdrant server floor is higher than "1.14+" — it is 1.16 or later, and 1.15.1 is not enough.** `qdrant-client` exposes two fusion shapes and they are **not** equivalent:
+   - `FusionQuery(fusion=Fusion.RRF)` — the form nearly every example shows. Carries **neither `weights` nor `k`**: plain unweighted RRF against an unpublished server default.
+   - `RrfQuery(rrf=Rrf(k=..., weights=[...]))` — the weighted form, and the only one where both terms of `RRF_MAX = (w_dense + w_sparse) / (k + 1)` are our own constants.
+
+   Server **1.15.1 rejects the second outright**: `Format error in JSON body: Expected some form of vector, id, or a type of query`. Caught by an end-to-end test, not by review — using `FusionQuery` instead would have looked correct, returned plausible results, and made every G2 threshold silently meaningless (I7). **`docker-compose.yml` is pinned to `v1.18.0`**, which also clears the client/server compatibility warning (client 1.18 vs server 1.15 exceeded the one-minor-version tolerance).
+10. **Deterministic chunk ids need upsert semantics on *both* stores.** Qdrant's `upsert` honours them for free; a plain SQLAlchemy `session.add` turns the same determinism into a primary-key violation on the second ingest. `app/ingest/pipeline.py` uses `sqlalchemy.dialects.postgresql.insert(...).on_conflict_do_update(...)`. Idempotency has to mean the same thing in both systems or it fails the whole ingest in one of them.
+
 ### Open gaps in this note — 2026-07-27
 
 Flagged rather than filled, because guessing a URL is the same mistake as guessing an API. Three matter; the rest of the blanks are fine.

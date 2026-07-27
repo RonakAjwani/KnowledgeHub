@@ -12,10 +12,15 @@
 
 services:
   qdrant:
-    # >= 1.14 is load-bearing: below it the rrf fusion object exposes neither
-    # `weights` nor `k`, and RRF_MAX — which every G2 threshold is derived from —
-    # becomes unknowable. Pinned rather than :latest so the API cannot move underfoot.
-    image: qdrant/qdrant:v1.15.1
+    # The server version is load-bearing, and the floor is higher than the
+    # vault's "1.14+" note assumed. 1.14 introduced weighted RRF, but the
+    # `{"rrf": {"k": ..., "weights": [...]}}` query object — the only form that
+    # lets us pin `k` — is newer: 1.15.1 rejects it outright with
+    # "Expected some form of vector, id, or a type of query".
+    # Without a settable `k`, RRF_MAX is derived from a server default we cannot
+    # see, and every G2 threshold silently means nothing (I7).
+    # Pinned, not :latest, so the API cannot move underfoot.
+    image: qdrant/qdrant:v1.18.0
     ports:
       - "6333:6333"
       - "6334:6334"
