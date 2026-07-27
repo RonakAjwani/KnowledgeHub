@@ -61,6 +61,12 @@ extend-exclude = ["app/db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+# ASYNC109 flags `timeout` parameters on async functions, on the assumption they
+# hand-roll what `asyncio.timeout()` does. Ours delegate to httpx, which applies
+# separate connect/read/write budgets — strictly better than wrapping the call in
+# a single outer deadline. The contract's §5 table is expressed as per-dependency
+# timeouts, so the parameter is the interface, not an implementation detail.
+ignore = ["ASYNC109"]
 
 [tool.mypy]
 python_version = "3.12"

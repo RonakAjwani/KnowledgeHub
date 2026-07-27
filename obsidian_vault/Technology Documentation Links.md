@@ -138,6 +138,16 @@ Qdrant *server* is pinned to **v1.15.1** in `docker-compose.yml` and **confirmed
 5. **`fastembed` 0.8.0 exposes `token_count` publicly** — `TextEmbedding.token_count(texts, batch_size=1024) -> int`. So chunk sizing uses the same tokenizer that produces the vectors, rather than an approximation of it. `TextEmbedding(model_name=..., cache_dir=..., threads=1)`; `lazy_load=True` also exists if startup RSS becomes a problem on Render. Quantized `bge-small-en-v1.5` is **64 MB on disk** once cached.
 6. ⚠️ **Windows: fastembed's HuggingFace download hits `WinError 1314` (symlink privilege) unless Developer Mode is on.** It retries, falls back to copying, and succeeds — so it is noise rather than a blocker, but the first load is slow and logs two red ERROR lines that look worse than they are. Linux and the Docker image are unaffected. If it becomes annoying locally, enable Windows Developer Mode.
 
+### API findings — 2026-07-28, Phase 2b
+
+7. **The Anthropic Messages API differs from the OpenAI-compatible shape in three ways, all of which fail at runtime rather than at review.** The adapter handles each in `app/llm/client.py`, and there is a test pinning each:
+   - **`system` is a top-level request field**, not a message with `role: "system"`. Leaving it in `messages[]` is rejected.
+   - **Images are `{"type": "image", "source": {"type": "base64", "media_type", "data"}}`** — not the `image_url` data-URI block the OpenAI shape uses.
+   - ⚠️ **`temperature` is *removed*, not deprecated, on current Claude models** (Opus 5 / 4.8 / 4.7, Fable 5, Sonnet 5) — sending it returns a **400**. The adapter drops it for those model prefixes and still sends it for older ones (e.g. Haiku 4.5). This is the one most likely to be missed, because passing temperature is harmless on every other provider.
+   - Streaming delta shape also differs: `content_block_delta` → `delta.text` (Anthropic) vs `choices[0].delta.content` (OpenAI-compatible).
+   - Current model IDs carry **no date suffix**: `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5`.
+8. **Ruff's `ASYNC109` is a false positive for httpx-based clients.** It flags any async function taking a `timeout` parameter, assuming it hand-rolls `asyncio.timeout()`. Delegating to httpx is better — separate connect/read/write budgets — and the contract's §5 table is expressed as per-dependency timeouts, so the parameter *is* the interface. Ignored project-wide with that reason recorded in `pyproject.toml`.
+
 ### Open gaps in this note — 2026-07-27
 
 Flagged rather than filled, because guessing a URL is the same mistake as guessing an API. Three matter; the rest of the blanks are fine.
