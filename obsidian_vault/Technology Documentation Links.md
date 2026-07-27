@@ -124,7 +124,7 @@ pypdf 6.14.2            pdfplumber 0.11.10     pypdfium2 5.12.1
 — dev group: pytest 9.1.1, pytest-asyncio 1.4.0, deepeval 3.9.9, ruff 0.16.0, mypy 1.20.2
 ```
 
-Qdrant *server* is pinned to **v1.15.1** in `docker-compose.yml` (client 1.18.0 talks to it fine). Server version still to be confirmed against a running container in Phase 3.
+Qdrant *server* is pinned to **v1.15.1** in `docker-compose.yml` and **confirmed from the running container** (`GET /` returns `{"version":"1.15.1"}`) — comfortably above the 1.14 floor where `rrf` gained `weights`/`k`. Client 1.18.0 talks to it fine.
 
 ### API findings — 2026-07-27, Phase 0
 

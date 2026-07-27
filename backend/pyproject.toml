@@ -51,6 +51,9 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Alembic writes these; reformatting generated migrations by hand invites the
+# next autogenerate to undo the edit. env.py is hand-written and stays linted.
+extend-exclude = ["app/db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

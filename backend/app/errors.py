@@ -146,7 +146,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     frontend survives into our logs.
     """
 
-    async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
+    async def dispatch(self, request: Request, call_next):
         rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:16]
         token = _request_id.set(rid)
         try:
