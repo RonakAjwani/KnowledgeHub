@@ -234,6 +234,24 @@ class Settings(BaseSettings):
     # the reranker puts the load-bearing passages first.
     max_context_tokens: int = 4000
 
+    # The same budget, re-cut for the rate-limit fallback model.
+    #
+    # MEASURED 2026-07-29 off Groq's own rate-limit headers: the primary
+    # (llama-3.3-70b-versatile) allows 12,000 tokens/minute, but the fallback
+    # (llama-3.1-8b-instant) allows only 6,000 — the safety net has *half* the
+    # headroom of the thing it catches. A full-budget request is
+    # `max_context_tokens` + `max_answer_tokens` + the system prompt and question
+    # on top, so replaying the primary's prompt at 4000 + 2048 = 6048 exceeds the
+    # fallback's ceiling before overhead is even counted, and returns 413 — not
+    # 429, so no retry recovers it. The degraded path would fail exactly when it
+    # is needed.
+    #
+    # 2000 leaves room for the answer and the prompt overhead inside 6,000. A
+    # degraded answer from less context is the correct trade against no answer
+    # at all, and the `degradation` event already tells the user which model
+    # replied (I1) — it now also means the context was trimmed.
+    max_context_tokens_fallback: int = 2000
+
     # Skip the reranker when fusion is already decisive. Cross-branch agreement
     # is the real signal: when dense and sparse independently rank the same chunk
     # first, a cross-encoder is unlikely to overturn it, so the call buys nothing

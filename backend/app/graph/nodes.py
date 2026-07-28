@@ -611,9 +611,23 @@ def fit_context(
     return kept, len(candidates) - len(kept)
 
 
-def build_generate_messages(state: QueryState) -> tuple[list[Message], list[str]]:
+def build_generate_messages(
+    state: QueryState, *, context_tokens: int | None = None
+) -> tuple[list[Message], list[str]]:
+    """Assemble the generate prompt, optionally under a tighter token budget.
+
+    ``context_tokens`` overrides ``max_context_tokens`` for this build alone. It
+    exists for the rate-limit fallback: the smaller model a degraded turn
+    switches to has a *lower* per-minute ceiling than the primary, so replaying
+    the primary's prompt at full size would 413 on the one path that is supposed
+    to be the safety net.
+    """
+    cfg = get_settings()
+    if context_tokens is not None:
+        cfg = cfg.model_copy(update={"max_context_tokens": context_tokens})
+
     candidates = state.get("candidates", [])[: context_budget(state)]
-    candidates, _ = fit_context(candidates)
+    candidates, _ = fit_context(candidates, cfg)
     user_message, chunk_ids = prompts.build_generate_user_message(
         state.get("effective_query", state["raw_query"]),
         candidates,

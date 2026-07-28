@@ -306,6 +306,18 @@ class TurnRunner:
             state["degradations"] = [*state.get("degradations", []), degradation]
             yield self.stream.frame("degradation", degradation.model_dump(mode="json"))
 
+            # Rebuilt, not replayed. The fallback model's per-minute ceiling is
+            # half the primary's (measured: 6,000 vs 12,000), so re-sending the
+            # primary's full-size prompt returns 413 — and a 413 is not a 429, so
+            # nothing retries it. Fewer DATA blocks reach the model, which is why
+            # the citation list is re-derived from the *new* chunk_ids below
+            # rather than kept from the first attempt: a citation list built from
+            # a prompt the model never saw would point [n] at the wrong chunk.
+            messages, chunk_ids = nodes.build_generate_messages(
+                state, context_tokens=settings.max_context_tokens_fallback
+            )
+            top = [by_id[cid] for cid in chunk_ids if cid in by_id]
+
             try:
                 async for delta in self.deps.llm.stream(
                     messages,
