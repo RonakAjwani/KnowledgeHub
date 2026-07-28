@@ -69,7 +69,7 @@ Diagnostics:
 
 ```bash
 cd backend
-poetry run pytest -q                                    # 292 tests, no live services needed
+poetry run pytest -q                                    # 292 tests; 10 integration tests skip unless postgres+qdrant are up
 poetry run ruff check app tests scripts evals
 poetry run mypy app
 PYTHONPATH=. poetry run python scripts/verify_api.py     # acceptance test against a live stack
@@ -129,7 +129,7 @@ stream needs, so contract mentions of `EventSource` describe intent, not the lit
 | Streaming responses (bonus) | `POST /chat` SSE — token deltas, pipeline stage events, degradation events, all on one connection |
 | Auth (bonus) | Clerk, skipped cleanly in `AUTH_MODE=dev` so the assignment can be evaluated with zero account setup |
 | Hybrid search / re-ranking (bonus) | Server-side weighted RRF (dense + sparse) + conditional Cohere rerank |
-| CI (bonus) | Not built this pass — see [Known limitations](#known-limitations) |
+| CI (bonus) | `.github/workflows/ci.yml` — lint, typecheck and the full test suite on every push, with Postgres and Qdrant as service containers so the integration tests actually run rather than skip |
 
 ## Design decisions
 
@@ -254,8 +254,13 @@ decisions](#design-decisions) above).
   frame ordering guarantees.
 - **`scripts/verify_api.py`** — the acceptance test against a live stack, described above.
 - **Frontend**: `pnpm build`, `pnpm lint`, `tsc --noEmit`, all clean.
-- **Not yet built**: a CI workflow to run the above on push (see Known limitations), and an
-  ablation table (dense-only / BM25-only / RRF / RRF+rerank recall comparison).
+- **CI** (`.github/workflows/ci.yml`) runs all of the above on every push. Postgres and
+  Qdrant run as service containers so the ten integration tests — real write ordering, real
+  hybrid search, cascading delete — execute rather than skipping themselves. The eval suite and
+  `verify_api.py` are deliberately *not* gated: both need live LLM and Cohere keys, and a job
+  that goes green because a secret is unset reports "tests pass" while testing nothing.
+- **Not yet built**: an ablation table (dense-only / BM25-only / RRF / RRF+rerank recall
+  comparison).
 
 ## Repository layout
 
@@ -270,7 +275,7 @@ backend/
     llm/          provider-agnostic adapter (Gemini/Groq/Anthropic), pacing, cache
     db/           SQLAlchemy models + Alembic migrations
   scripts/        verify_api.py, corpus ingest, RRF/decisive-margin probes
-  evals/          golden-set questions + eval runner (not a CI gate yet)
+  evals/          golden-set questions + eval runner (manual — needs live API keys)
   tests/
 frontend/
   app/            Next.js App Router pages, incl. sign-in/sign-up
@@ -290,8 +295,6 @@ Stated plainly rather than left for a reviewer to discover:
   reasoning and by two live measurement scripts (`probe_rrf_rank_base.py`,
   `probe_decisive_margin.py`), but a side-by-side recall comparison across dense-only /
   BM25-only / RRF / RRF+rerank was not built this pass.
-- **No CI pipeline.** Tests and lint run locally and are described above; they are not yet
-  gated on push.
 - **`FLOOR_FUSED` is an open problem, not a bug** — see [What's deliberately
   unresolved](#whats-deliberately-unresolved). The un-reranked path's relevance signal needs a
   different score source (raw dense cosine measured as a candidate, not yet wired in) before a

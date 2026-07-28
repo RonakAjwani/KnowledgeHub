@@ -1,0 +1,167 @@
+name: CI
+
+# Lint, typecheck and test on every push and pull request.
+#
+# The backend job runs Postgres and Qdrant as service containers rather than
+# letting the integration tests skip themselves. Those ten tests are the only
+# ones that exercise the real write ordering (Qdrant first, then the Postgres
+# mirror), real hybrid search against a real collection, and the cascading
+# delete — skipping them would leave CI green while the parts most likely to
+# break in production went unexercised. `pytest.skip` on missing services is
+# right for a laptop; it is the wrong default for CI.
+#
+# What is deliberately NOT gated here: the eval suite (`evals/run.py`) and
+# `scripts/verify_api.py`. Both need live LLM and Cohere keys, and a CI job that
+# silently passes because a secret is unset is worse than no job at all — it
+# reports "tests pass" while testing nothing. They stay manual, and the README
+# says so.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref; nobody needs the
+  # result of a commit that has already been replaced.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend — lint, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: knowledgehub
+          POSTGRES_PASSWORD: knowledgehub
+          POSTGRES_DB: knowledgehub
+        ports:
+          - 5432:5432
+        # The tests connect to localhost:5432 directly, so the port has to be
+        # published and the container has to be ready before the suite starts.
+        options: >-
+          --health-cmd "pg_isready -U knowledgehub -d knowledgehub"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      qdrant:
+        # Pinned to the same tag Compose uses. The RRF query object that lets us
+        # pin `k` does not exist below 1.16, and an unpinned `k` silently breaks
+        # every threshold derived from RRF_MAX (I7).
+        image: qdrant/qdrant:v1.18.0
+        ports:
+          - 6333:6333
+        # No health-cmd: the Qdrant image is distroless, so there is no shell for
+        # Docker to run one in. Readiness is polled from the runner below instead.
+
+    env:
+      # Matches the constants the integration tests use.
+      DATABASE_URL: postgresql+asyncpg://knowledgehub:knowledgehub@localhost:5432/knowledgehub
+      QDRANT_URL: http://localhost:6333
+      AUTH_MODE: dev
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/backend/.fastembed_cache
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12 is load-bearing, not incidental — see CLAUDE.md.
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry==2.4.0
+
+      - name: Configure Poetry
+        # Same in-project venv layout as local development, which is also what
+        # makes the cache key below point at a stable path.
+        run: poetry config virtualenvs.in-project true
+
+      - name: Cache the virtualenv
+        uses: actions/cache@v4
+        with:
+          path: backend/.venv
+          key: venv-${{ runner.os }}-py312-${{ hashFiles('backend/poetry.lock') }}
+
+      - name: Cache the fastembed model
+        # ~130 MB of ONNX weights. Downloading them on every run would dominate
+        # the job's wall time and hammer the HuggingFace CDN for no reason.
+        uses: actions/cache@v4
+        with:
+          path: backend/.fastembed_cache
+          key: fastembed-${{ runner.os }}-bge-small-en-v1.5
+
+      - name: Install dependencies
+        # Dev group included: ruff, mypy and pytest all live there.
+        run: poetry install --no-root
+
+      - name: Wait for Qdrant
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:6333/readyz > /dev/null; then
+              echo "qdrant ready after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "qdrant did not become ready"; exit 1
+
+      - name: Apply migrations
+        # The integration tests read and write real tables; an unmigrated
+        # database would fail them on missing relations rather than on logic.
+        run: poetry run alembic upgrade head
+
+      - name: Lint
+        run: poetry run ruff check app tests scripts evals
+
+      - name: Typecheck
+        run: poetry run mypy app
+
+      - name: Test
+        run: poetry run pytest -q
+
+  frontend:
+    name: frontend — lint, typecheck, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        # No NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is set, which is the AUTH_MODE=dev
+        # shape: the build must succeed without a Clerk account, because that is
+        # the path a reviewer running `docker compose up` actually takes.
+        run: pnpm build
