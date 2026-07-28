@@ -351,3 +351,24 @@ def test_parent_window_terminates_when_budget_blocks_growth() -> None:
     for chunk in chunks:
         assert chunk.parent_char_start <= chunk.char_start
         assert chunk.parent_char_end >= chunk.char_end
+
+
+def test_borderless_rescue_needs_a_caption_to_fire() -> None:
+    """The fallback detector is gated on the author saying a table is there.
+
+    Measured over the corpus, running pdfplumber's text strategy unconditionally
+    finds 16 tables in a paper containing one, and drops another page from 50
+    detections to 9 — so the rescue is scoped to pages whose own text carries a
+    table caption *and* where the default detector found nothing. Ordinary prose,
+    and a passing mention mid-sentence, must not trigger it.
+    """
+    from app.ingest.parse import _TABLE_CAPTION_RE
+
+    # Real captions, at line start — these are the author declaring a table.
+    for caption in ("Table 1: Results", "TABLE II  Latency", "Tab. 3 — Sizes"):
+        assert _TABLE_CAPTION_RE.search(caption), caption
+
+    # A mention inside a sentence is not a caption; matching it would point the
+    # noisy strategy at pages of plain prose.
+    assert not _TABLE_CAPTION_RE.search("as Table 2 shows, revenue grew")
+    assert not _TABLE_CAPTION_RE.search("no tabular content here at all")

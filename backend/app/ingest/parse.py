@@ -62,6 +62,11 @@ _SPARSE_TEXT_CHARS_PER_KILOPIXEL = 0.02
 # nothing is being split that should not be.
 _X_TOLERANCE_RATIO = 0.15
 
+# "Table 2", "TABLE II", "Tab. 3" at the start of a line — the author's own
+# statement that a table is present. Anchored to line start so a passing mention
+# mid-sentence ("as Table 2 shows") does not trigger the fallback detector.
+_TABLE_CAPTION_RE = re.compile(r"^[ \t]*(?:Table|TABLE|Tab\.)\s*(?:[IVXLC]+|\d+)\b", re.M)
+
 _MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _MD_TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:-]*-{3,}[\s:|-]*\|?\s*$")
 
@@ -216,6 +221,43 @@ def _looks_like_heading(line: str, size: float, body_size: float) -> bool:
     if not line.strip() or len(line) > 120:
         return False
     return size >= body_size * 1.15
+
+
+def _rescue_borderless_tables(page: pdfplumber.page.Page, text: str) -> list:
+    """Find tables on a page that draws no ruling lines around them.
+
+    pdfplumber's default detector keys on ruled lines, which LaTeX's `booktabs`
+    style deliberately omits — measured across the corpus, one 5-page paper
+    captions three tables and the default strategy finds **zero** of them. The
+    text is still extracted (it lands in the prose stream), but it is never
+    marked as a table, so it can be split mid-row by the chunker and never picks
+    up the caption/lead-line ladder that makes a table's numbers attributable.
+
+    Deliberately narrow, because the obvious fix is a regression. Measured over
+    the same corpus, switching to the text strategy everywhere finds **16**
+    tables in a paper containing one, and drops another page's 50 detections to
+    9. So this runs only when two conditions hold at once:
+
+    * the default detector found nothing on this page, and
+    * the page's own text carries a table caption, i.e. the author says there is
+      a table here.
+
+    That second condition is what keeps the noisy strategy off pages that simply
+    have none, and it is why this is scoped to captioned tables — an unlabelled
+    borderless table stays missed, which is the honest trade for not
+    hallucinating tables out of ordinary prose columns.
+    """
+    if not _TABLE_CAPTION_RE.search(text):
+        return []
+    try:
+        return (
+            page.find_tables(
+                {"vertical_strategy": "text", "horizontal_strategy": "text"}
+            )
+            or []
+        )
+    except Exception:  # noqa: BLE001 — same contract as the default detector:
+        return []  # a page that defeats detection still has readable prose
 
 
 def _assess_page(page: pdfplumber.page.Page, tables: list, text: str) -> PageAssessment:
@@ -373,6 +415,7 @@ def parse_pdf(data: bytes) -> ParseResult:
                 tables = []  # the detector still has readable prose
 
             page_text = page.extract_text(x_tolerance_ratio=_X_TOLERANCE_RATIO) or ""
+            tables = tables or _rescue_borderless_tables(page, page_text)
             assessments.append(_assess_page(page, tables, page_text))
 
             # Walk the page top to bottom, carving prose out of the gaps between
