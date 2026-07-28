@@ -13,11 +13,13 @@ import pytest
 from app.db.models import (
     Base,
     Chunk,
+    Conversation,
     ConversationState,
     Document,
     Message,
     MessageCitation,
     UserPreference,
+    Workspace,
 )
 from app.models.schemas import chunk_id
 
@@ -116,15 +118,21 @@ def test_related_spans_and_derived_flag_exist() -> None:
 # ---------------------------------------------------------------- idempotency
 
 
-def test_duplicate_upload_is_prevented_per_user_not_globally() -> None:
+def test_duplicate_upload_is_prevented_per_user_and_workspace_not_globally() -> None:
     """Re-uploading returns the existing document; two users uploading the same
-    public PDF are still two documents."""
+    public PDF are still two documents — and so are the same user's two
+    unrelated workspaces uploading it, since a workspace's whole point is an
+    independent document set."""
     constraint = next(
         c
         for c in Document.__table__.constraints
-        if c.name == "uq_documents_user_sha"
+        if c.name == "uq_documents_user_ws_sha"
     )
-    assert {c.name for c in constraint.columns} == {"user_id", "content_sha256"}
+    assert {c.name for c in constraint.columns} == {
+        "user_id",
+        "workspace_id",
+        "content_sha256",
+    }
 
 
 def test_chunk_ids_are_deterministic_and_position_sensitive() -> None:
@@ -184,3 +192,44 @@ def test_messages_persist_degradations() -> None:
     """I1: a reloaded conversation must still show that an answer was degraded."""
     assert "degradations" in Message.__table__.c
     assert not Message.__table__.c.degradations.nullable
+
+
+# --------------------------------------------------------------- workspaces
+
+
+def test_workspace_id_is_nullable_on_documents_and_conversations() -> None:
+    """Nullable, not required: a document or conversation from before workspaces
+    existed, or from a caller that never sets one, is still valid — just
+    ungrouped. I3 is still enforced by user_id regardless of workspace_id."""
+    assert Document.__table__.c.workspace_id.nullable
+    assert Conversation.__table__.c.workspace_id.nullable
+
+
+def test_workspace_foreign_keys_cascade_on_delete() -> None:
+    """Deleting a workspace must not strand its documents or conversations —
+    they either go with it or the delete has to fail; leaving them behind with
+    a dangling workspace_id is the one outcome nothing should produce."""
+    for table, column in ((Document, "workspace_id"), (Conversation, "workspace_id")):
+        fk = next(iter(table.__table__.c[column].foreign_keys))
+        assert fk.ondelete == "CASCADE"
+
+
+def test_workspace_scoped_dedup_lets_the_same_file_live_in_two_workspaces() -> None:
+    """The same PDF can legitimately belong to two unrelated workspaces — a
+    style guide referenced from two different projects should be two rows, not
+    one document silently reparented between them."""
+    constraint = next(
+        c
+        for c in Document.__table__.constraints
+        if c.name == "uq_documents_user_ws_sha"
+    )
+    assert {c.name for c in constraint.columns} == {
+        "user_id",
+        "workspace_id",
+        "content_sha256",
+    }
+
+
+def test_workspace_scoped_by_user_id() -> None:
+    assert "user_id" in Workspace.__table__.c
+    assert not Workspace.__table__.c.user_id.nullable

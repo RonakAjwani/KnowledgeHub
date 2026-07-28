@@ -242,6 +242,114 @@ async def main() -> int:
             f"{len(messages)} messages",
         )
 
+        print("\n[7a] workspaces — upload once, scope every chat inside them")
+        ws_a = await client.post("/workspaces", json={"name": "Workspace A"})
+        ws_b = await client.post("/workspaces", json={"name": "Workspace B"})
+        check(
+            "create two workspaces",
+            ws_a.status_code == 201 and ws_b.status_code == 201,
+            f"{ws_a.status_code} {ws_b.status_code}",
+        )
+        ws_a_id, ws_b_id = ws_a.json()["id"], ws_b.json()["id"]
+
+        path = CORPUS / UPLOADS[1]
+        doc_in_a = await client.post(
+            "/documents",
+            data={"workspace_id": ws_a_id},
+            files={"file": (UPLOADS[1], path.read_bytes(), "application/pdf")},
+        )
+        check(
+            "upload into workspace A",
+            doc_in_a.status_code in (200, 201),
+            doc_in_a.text[:120],
+        )
+
+        # The same bytes into workspace B must be a *second* document, not the
+        # first one silently reparented — a workspace's whole point is an
+        # independent document set, even for content two projects share.
+        doc_in_b = await client.post(
+            "/documents",
+            data={"workspace_id": ws_b_id},
+            files={"file": (UPLOADS[1], path.read_bytes(), "application/pdf")},
+        )
+        check(
+            "the same file in a second workspace is a distinct document",
+            doc_in_b.status_code == 201
+            and doc_in_b.json()["id"] != doc_in_a.json().get("id"),
+            f"a={doc_in_a.json().get('id')} b={doc_in_b.json().get('id')}",
+        )
+
+        for _ in range(60):
+            detail = (await client.get(f"/documents/{doc_in_a.json()['id']}")).json()
+            if detail.get("status") in ("ready", "failed"):
+                break
+            await asyncio.sleep(2)
+        check(
+            "document in workspace A reaches ready",
+            detail.get("status") == "ready",
+            f"status={detail.get('status')}",
+        )
+
+        listed_a = await client.get("/documents", params={"workspace_id": ws_a_id})
+        listed_b = await client.get("/documents", params={"workspace_id": ws_b_id})
+        check(
+            "listing is scoped to its own workspace",
+            len(listed_a.json()) == 1
+            and len(listed_b.json()) == 1
+            and listed_a.json()[0]["id"] != listed_b.json()[0]["id"],
+            f"a={len(listed_a.json())} b={len(listed_b.json())}",
+        )
+
+        await asyncio.sleep(PACE_S)
+        ws_chat = await sse(
+            client,
+            "/chat",
+            {
+                "message": "What are the three tools exposed by the MathModDB MCP server?",
+                "workspace_id": ws_a_id,
+            },
+        )
+        ws_conversation_id = ""
+        ws_citations: list[dict] = []
+        for name, data in ws_chat:
+            payload = json.loads(data)
+            if name in ("error", "degradation"):
+                print(f"        {name}: {data[:200]}")
+            if name == "turn.start":
+                ws_conversation_id = payload.get("conversation_id", "")
+            elif name == "answer.complete":
+                ws_citations = payload.get("citations", [])
+        check(
+            "a chat started inside a workspace answers from its documents",
+            bool(ws_citations),
+            "no citations — retrieval should have been scoped to workspace A's document",
+        )
+
+        convos_a = await client.get("/conversations", params={"workspace_id": ws_a_id})
+        convos_b = await client.get("/conversations", params={"workspace_id": ws_b_id})
+        check(
+            "the conversation is filed under the workspace it started in",
+            any(c["id"] == ws_conversation_id for c in convos_a.json())
+            and not any(c["id"] == ws_conversation_id for c in convos_b.json()),
+            f"a_has_it={any(c['id'] == ws_conversation_id for c in convos_a.json())}",
+        )
+
+        deleted = await client.delete(f"/workspaces/{ws_a_id}")
+        check("delete workspace A", deleted.status_code == 204, str(deleted.status_code))
+        after_delete = await client.get(f"/documents/{doc_in_a.json()['id']}")
+        check(
+            "its document is gone too, not orphaned",
+            after_delete.status_code == 404,
+            str(after_delete.status_code),
+        )
+        b_survived = await client.get("/documents", params={"workspace_id": ws_b_id})
+        check(
+            "workspace B and its document are untouched",
+            b_survived.status_code == 200 and len(b_survived.json()) == 1,
+            b_survived.text[:120],
+        )
+        await client.delete(f"/workspaces/{ws_b_id}")
+
         print("\n[7] error handling")
         missing = await client.get("/documents/does-not-exist")
         check("unknown document -> 404", missing.status_code == 404, str(missing.status_code))

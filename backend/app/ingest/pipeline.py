@@ -374,17 +374,22 @@ async def _update_document(
 
 
 async def find_existing_document(
-    session: AsyncSession, *, user_id: str, sha256: str
+    session: AsyncSession, *, user_id: str, sha256: str, workspace_id: str | None = None
 ) -> db.Document | None:
-    """Idempotency, scoped per user.
+    """Idempotency, scoped per user *and* workspace.
 
     Re-uploading a file returns the existing document with HTTP 200 rather than
-    reprocessing it. Scoped rather than global because two users uploading the
-    same public PDF are two documents.
+    reprocessing it. Scoped to the workspace, not just the user, because the same
+    PDF can legitimately belong to two unrelated workspaces — matches the
+    ``uq_documents_user_ws_sha`` constraint exactly, so a second upload under a
+    different workspace creates a second row instead of silently returning the
+    first workspace's document.
     """
     result = await session.execute(
         select(db.Document).where(
-            db.Document.user_id == user_id, db.Document.content_sha256 == sha256
+            db.Document.user_id == user_id,
+            db.Document.content_sha256 == sha256,
+            db.Document.workspace_id == workspace_id,
         )
     )
     return result.scalar_one_or_none()

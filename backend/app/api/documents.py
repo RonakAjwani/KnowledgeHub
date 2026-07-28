@@ -18,7 +18,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -56,6 +56,7 @@ def _serialise(document: db.Document) -> dict:
         "chunk_count": document.chunk_count,
         "sanitization_report": document.sanitization_report,
         "extraction": document.extraction,
+        "workspace_id": document.workspace_id,
         "created_at": document.created_at.isoformat() if document.created_at else None,
     }
 
@@ -82,6 +83,10 @@ async def upload_document(
     background: BackgroundTasks,
     response: Response,
     file: UploadFile = File(...),
+    # None = ungrouped. The frontend always sends the active workspace, but the
+    # field stays optional so a script or a future non-workspace caller isn't
+    # forced to invent one.
+    workspace_id: str | None = Form(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     settings = get_settings()
@@ -100,8 +105,13 @@ async def upload_document(
             {"mime": mime},
         )
 
+    if workspace_id is not None:
+        await _owned_workspace(session, user_id, workspace_id)
+
     sha = content_sha256(data)
-    existing = await find_existing_document(session, user_id=user_id, sha256=sha)
+    existing = await find_existing_document(
+        session, user_id=user_id, sha256=sha, workspace_id=workspace_id
+    )
     if existing is not None:
         # Idempotent: return what they already have, with 200 rather than 201.
         response.status_code = 200
@@ -109,6 +119,7 @@ async def upload_document(
 
     document = db.Document(
         user_id=user_id,
+        workspace_id=workspace_id,
         filename=file.filename or "document",
         mime=mime,
         content_sha256=sha,
@@ -120,6 +131,14 @@ async def upload_document(
 
     background.add_task(_run_ingest, document.id, user_id, data, mime)
     return _serialise(document)
+
+
+async def _owned_workspace(session: AsyncSession, user_id: str, workspace_id: str) -> None:
+    """A document cannot be filed under a workspace the caller does not own —
+    otherwise a guessed id would silently attach someone else's upload to it."""
+    workspace = await session.get(db.Workspace, workspace_id)
+    if workspace is None or workspace.user_id != user_id:
+        raise NotFound("No such workspace.")
 
 
 async def _run_ingest(doc_id: str, user_id: str, data: bytes, mime: str) -> None:
@@ -163,13 +182,14 @@ async def _run_ingest(doc_id: str, user_id: str, data: bytes, mime: str) -> None
 
 @router.get("/documents")
 async def list_documents(
-    user_id: UserId, session: AsyncSession = Depends(get_session)
+    user_id: UserId,
+    workspace_id: str | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    result = await session.execute(
-        select(db.Document)
-        .where(db.Document.user_id == user_id)
-        .order_by(db.Document.created_at.desc())
-    )
+    query = select(db.Document).where(db.Document.user_id == user_id)
+    if workspace_id is not None:
+        query = query.where(db.Document.workspace_id == workspace_id)
+    result = await session.execute(query.order_by(db.Document.created_at.desc()))
     return [_serialise(d) for d in result.scalars().all()]
 
 

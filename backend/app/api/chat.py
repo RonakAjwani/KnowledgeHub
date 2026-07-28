@@ -45,9 +45,15 @@ router = APIRouter(tags=["chat"])
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = None
-    # None means "every ready document". A list scopes retrieval to those
-    # documents via a Qdrant payload filter — the per-document checkboxes in the
-    # UI, and the "Multi-" in the project title.
+    # A new conversation started from inside a workspace is tagged with it, so
+    # it shows up under that workspace on reload without the client having to
+    # re-send it on every later turn. Ignored once `conversation_id` is set —
+    # the conversation's own workspace_id wins, since a chat cannot change which
+    # workspace it belongs to mid-thread.
+    workspace_id: str | None = None
+    # None means "every ready document, or every document in the conversation's
+    # workspace if it has one". A list scopes retrieval to those documents via a
+    # Qdrant payload filter — the per-document checkboxes in the UI.
     selected_doc_ids: list[str] | None = None
 
 
@@ -57,7 +63,20 @@ async def chat(
     user_id: UserId,
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
-    conversation = await _ensure_conversation(session, user_id, request.conversation_id)
+    conversation = await _ensure_conversation(
+        session, user_id, request.conversation_id, request.workspace_id
+    )
+    selected_doc_ids = request.selected_doc_ids
+    if selected_doc_ids is None and conversation.workspace_id is not None:
+        # Scope to the workspace's own documents rather than every document the
+        # user has ever uploaded — the whole point of a workspace is that a chat
+        # inside it only ever searches what was put there.
+        doc_rows = await session.execute(
+            select(db.Document.id).where(
+                db.Document.workspace_id == conversation.workspace_id
+            )
+        )
+        selected_doc_ids = [row[0] for row in doc_rows.all()]
     memory = await load_memory(
         session, conversation_id=conversation.id, user_id=user_id
     )
@@ -81,7 +100,7 @@ async def chat(
         user_id=user_id,
         conversation_id=conversation.id,
         raw_query=request.message,
-        selected_doc_ids=request.selected_doc_ids,
+        selected_doc_ids=selected_doc_ids,
         recent_turns=memory.recent_turns,
         rolling_summary=memory.rolling_summary,
         entity_ledger=memory.entity_ledger,
@@ -163,7 +182,10 @@ async def chat(
 
 
 async def _ensure_conversation(
-    session: AsyncSession, user_id: str, conversation_id: str | None
+    session: AsyncSession,
+    user_id: str,
+    conversation_id: str | None,
+    workspace_id: str | None,
 ) -> db.Conversation:
     if conversation_id:
         conversation = await session.get(db.Conversation, conversation_id)
@@ -171,7 +193,14 @@ async def _ensure_conversation(
             raise NotFound("No such conversation.")
         return conversation
 
-    conversation = db.Conversation(id=str(uuid.uuid4()), user_id=user_id)
+    if workspace_id is not None:
+        workspace = await session.get(db.Workspace, workspace_id)
+        if workspace is None or workspace.user_id != user_id:
+            raise NotFound("No such workspace.")
+
+    conversation = db.Conversation(
+        id=str(uuid.uuid4()), user_id=user_id, workspace_id=workspace_id
+    )
     session.add(conversation)
     await session.commit()
     return conversation
@@ -180,23 +209,26 @@ async def _ensure_conversation(
 # ------------------------------------------------------------- conversations
 
 
+def _serialise_conversation(c: db.Conversation) -> dict:
+    return {
+        "id": c.id,
+        "title": c.title,
+        "workspace_id": c.workspace_id,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    }
+
+
 @router.get("/conversations")
 async def list_conversations(
-    user_id: UserId, session: AsyncSession = Depends(get_session)
+    user_id: UserId,
+    workspace_id: str | None = None,
+    session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    result = await session.execute(
-        select(db.Conversation)
-        .where(db.Conversation.user_id == user_id)
-        .order_by(db.Conversation.updated_at.desc())
-    )
-    return [
-        {
-            "id": c.id,
-            "title": c.title,
-            "created_at": c.created_at.isoformat() if c.created_at else None,
-        }
-        for c in result.scalars().all()
-    ]
+    query = select(db.Conversation).where(db.Conversation.user_id == user_id)
+    if workspace_id is not None:
+        query = query.where(db.Conversation.workspace_id == workspace_id)
+    result = await session.execute(query.order_by(db.Conversation.updated_at.desc()))
+    return [_serialise_conversation(c) for c in result.scalars().all()]
 
 
 @router.get("/conversations/{conversation_id}")
@@ -216,8 +248,7 @@ async def get_conversation(
     )
     messages = result.scalars().all()
     return {
-        "id": conversation.id,
-        "title": conversation.title,
+        **_serialise_conversation(conversation),
         "messages": [await _serialise_message(session, m) for m in messages],
     }
 

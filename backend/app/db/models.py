@@ -48,11 +48,42 @@ class Base(DeclarativeBase):
     pass
 
 
+class Workspace(Base):
+    """A named group of documents that many conversations share.
+
+    The point is upload-once: a workspace's documents stay uploaded across
+    every chat opened inside it, rather than a user re-attaching files per
+    conversation. Modelled as its own table rather than a tag on ``Document``
+    because a conversation also belongs to one — both need the grouping, and a
+    workspace can be renamed or deleted independently of either.
+    """
+
+    __tablename__ = "workspaces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    documents: Mapped[list[Document]] = relationship(back_populates="workspace")
+    conversations: Mapped[list[Conversation]] = relationship(back_populates="workspace")
+
+
 class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # Nullable, not required: a document uploaded before workspaces existed, or
+    # through a path that never sets one, is still a valid document — just not
+    # grouped under anything. I3 is still enforced by user_id regardless.
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     mime: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -86,12 +117,21 @@ class Document(Base):
     chunks: Mapped[list[Chunk]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
+    workspace: Mapped[Workspace | None] = relationship(back_populates="documents")
 
     __table_args__ = (
-        # Idempotency, scoped per user: re-uploading a file returns the existing
-        # document rather than duplicating it. Scoped rather than global because
-        # two users uploading the same public PDF are two documents.
-        UniqueConstraint("user_id", "content_sha256", name="uq_documents_user_sha"),
+        # Idempotency, scoped per user *and* workspace: re-uploading a file
+        # returns the existing document rather than duplicating it. Scoped to the
+        # workspace, not just the user, because the same PDF can legitimately
+        # belong to two unrelated workspaces — a style guide referenced from two
+        # different projects should be two rows, not one document silently
+        # reparented. Postgres treats each NULL workspace_id as distinct, so
+        # documents predating workspaces (workspace_id IS NULL) never collide
+        # with each other here — acceptable, since every upload through the
+        # current API always supplies one.
+        UniqueConstraint(
+            "user_id", "workspace_id", "content_sha256", name="uq_documents_user_ws_sha"
+        ),
         Index("ix_documents_user_status", "user_id", "status"),
     )
 
@@ -147,6 +187,9 @@ class Conversation(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -157,6 +200,7 @@ class Conversation(Base):
     messages: Mapped[list[Message]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan"
     )
+    workspace: Mapped[Workspace | None] = relationship(back_populates="conversations")
 
 
 class Message(Base):
