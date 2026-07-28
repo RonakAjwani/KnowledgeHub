@@ -40,8 +40,13 @@ from app.graph import nodes
 from app.graph.nodes import Deps
 from app.graph.state import Grade, QueryState, Route
 from app.graph.verify import Verifier
-from app.llm.client import LLMError
-from app.models.schemas import Citation, Degradation
+from app.llm.client import LLMError, LLMRateLimited
+from app.models.schemas import (
+    Citation,
+    Degradation,
+    DegradationReason,
+    DegradationStage,
+)
 from app.retrieval.hydrate import load_filenames
 
 logger = logging.getLogger(__name__)
@@ -276,6 +281,44 @@ class TurnRunner:
             ):
                 parts.append(delta)
                 yield self.stream.frame("answer.delta", {"text": delta})
+        except LLMRateLimited as exc:
+            fallback = settings.llm_model_generate_fallback
+            # Free tiers meter the strongest model per *day*, and no amount of
+            # waiting inside one request recovers that — so the choice is a
+            # smaller model or no answer at all. Safe to restart because a 429 is
+            # known from the response status before any delta is yielded; once
+            # text has reached the client, re-requesting would duplicate it.
+            if not fallback or parts:
+                raise DependencyUnavailable(
+                    "llm", "Answer generation failed."
+                ) from exc
+
+            logger.warning("generate rate limited; falling back to %s", fallback)
+            degradation = Degradation(
+                stage=DegradationStage.GENERATE,
+                reason=DegradationReason.RATE_LIMITED,
+                fallback=fallback,
+                detail=(
+                    f"{settings.llm_model_generate} is rate limited or out of "
+                    f"quota; answered with {fallback} instead."
+                ),
+            )
+            state["degradations"] = [*state.get("degradations", []), degradation]
+            yield self.stream.frame("degradation", degradation.model_dump(mode="json"))
+
+            try:
+                async for delta in self.deps.llm.stream(
+                    messages,
+                    model=fallback,
+                    max_tokens=settings.max_answer_tokens,
+                    timeout=settings.timeout_llm_generate_s,
+                ):
+                    parts.append(delta)
+                    yield self.stream.frame("answer.delta", {"text": delta})
+            except LLMError as inner:
+                raise DependencyUnavailable(
+                    "llm", "Answer generation failed."
+                ) from inner
         except LLMError as exc:
             # A partial stream is closed with an explicit error frame, never
             # truncated silently — the caller's handler emits it.

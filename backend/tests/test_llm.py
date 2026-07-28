@@ -591,3 +591,33 @@ async def test_a_429_is_not_retried_when_the_wait_exceeds_the_budget() -> None:
     with pytest.raises(LLMRateLimited):
         await client.complete([Message(role="user", content="hi")], timeout=2.0)
     assert calls["n"] == 1, "must not sleep 25s inside a 2s budget"
+
+
+async def test_a_streamed_429_is_retried_too() -> None:
+    """Every chat turn streams, so guarding only `complete` left the product's
+    one hot path unprotected while the suite stayed green."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"retry-after": "0"}, text="slow down")
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n',
+        )
+
+    client = make_client(Settings(llm_provider="groq", groq_api_key="k"), handler)
+    chunks = [c async for c in client.stream([Message(role="user", content="hi")])]
+
+    assert "".join(chunks) == "Hi"
+    assert calls["n"] == 2
+
+
+async def test_a_streamed_429_gives_up_as_rate_limited() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"retry-after": "0"}, text="nope")
+
+    client = make_client(Settings(llm_provider="groq", groq_api_key="k"), handler)
+    with pytest.raises(LLMRateLimited):
+        [c async for c in client.stream([Message(role="user", content="hi")])]

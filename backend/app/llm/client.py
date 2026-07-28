@@ -486,38 +486,67 @@ class LLMClient:
             stream=True,
         )
         family = self._family
+        deadline = time.monotonic() + timeout
+        attempt = 0
 
-        try:
-            async with self._http().stream(
-                "POST", path, json=body, headers=self._headers(), timeout=timeout
-            ) as response:
-                if response.status_code >= 400:
-                    detail = (await response.aread()).decode(errors="replace")
-                    error = (
-                        LLMRateLimited if response.status_code == 429 else LLMError
-                    )
-                    raise error(
-                        f"{self.provider} returned {response.status_code}: {detail[:300]}"
-                    )
+        # The same bounded 429 retry as `complete`, and this is the path that
+        # actually matters: every chat turn streams, so protecting only the
+        # non-streaming path left the product's one hot route unguarded while
+        # the tests looked green. Safe to retry because a 429 is known from the
+        # response status before any delta has been yielded — once text has
+        # reached the caller, re-requesting would duplicate it.
+        while True:
+            try:
+                async with self._http().stream(
+                    "POST",
+                    path,
+                    json=body,
+                    headers=self._headers(),
+                    timeout=max(0.1, deadline - time.monotonic()),
+                ) as response:
+                    if response.status_code == 429:
+                        detail = (await response.aread()).decode(errors="replace")
+                        wait = _retry_after_seconds(response)
+                        remaining = deadline - time.monotonic()
+                        if attempt < _MAX_RATE_LIMIT_RETRIES and wait < remaining:
+                            logger.warning(
+                                "%s stream rate limited; retrying in %.1fs",
+                                self.provider,
+                                wait,
+                            )
+                            await asyncio.sleep(wait)
+                            attempt += 1
+                            continue
+                        raise LLMRateLimited(
+                            f"{self.provider} returned 429: {detail[:300]}"
+                        )
 
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    try:
-                        event = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
+                    if response.status_code >= 400:
+                        detail = (await response.aread()).decode(errors="replace")
+                        raise LLMError(
+                            f"{self.provider} returned {response.status_code}: "
+                            f"{detail[:300]}"
+                        )
 
-                    delta = _stream_delta(family, event)
-                    if delta:
-                        yield delta
-        except httpx.TimeoutException as exc:
-            raise LLMTimeout(f"{self.provider} stream timed out") from exc
-        except httpx.HTTPError as exc:
-            raise LLMError(f"{self.provider} stream failed: {exc}") from exc
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        try:
+                            event = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        delta = _stream_delta(family, event)
+                        if delta:
+                            yield delta
+                    return
+            except httpx.TimeoutException as exc:
+                raise LLMTimeout(f"{self.provider} stream timed out") from exc
+            except httpx.HTTPError as exc:
+                raise LLMError(f"{self.provider} stream failed: {exc}") from exc
 
 
 def _stream_delta(family: str, event: dict[str, Any]) -> str:

@@ -43,6 +43,7 @@ MODELS_BY_PROVIDER: dict[str, dict[str, str | None]] = {
         "route": "gemini-3.5-flash-lite",
         "rewrite": "gemini-3.5-flash-lite",
         "generate": "gemini-3.6-flash",
+        "generate_fallback": "gemini-3.5-flash-lite",
         "verify": "gemini-3.5-flash-lite",
         "vlm": "gemini-3.6-flash",
     },
@@ -63,6 +64,7 @@ MODELS_BY_PROVIDER: dict[str, dict[str, str | None]] = {
         "route": "llama-3.1-8b-instant",
         "rewrite": "llama-3.1-8b-instant",
         "generate": "llama-3.3-70b-versatile",
+        "generate_fallback": "llama-3.1-8b-instant",
         "verify": "llama-3.1-8b-instant",
         "vlm": None,
     },
@@ -70,6 +72,7 @@ MODELS_BY_PROVIDER: dict[str, dict[str, str | None]] = {
         "route": "claude-haiku-4-5-20251001",
         "rewrite": "claude-haiku-4-5-20251001",
         "generate": "claude-sonnet-5",
+        "generate_fallback": "claude-haiku-4-5-20251001",
         "verify": "claude-haiku-4-5-20251001",
         "vlm": "claude-sonnet-5",
     },
@@ -137,6 +140,11 @@ class Settings(BaseSettings):
     llm_model_route: str = ""
     llm_model_rewrite: str = ""
     llm_model_generate: str = ""
+    # Used only when the primary is rate limited or out of quota. Free tiers
+    # meter per *day* on the strongest model, so without this a demo simply
+    # stops answering once that number is reached — a hard 503 where a visibly
+    # degraded answer from a smaller model is obviously better (I1).
+    llm_model_generate_fallback: str = ""
     llm_model_verify: str = ""
     # Empty means this provider has no vision model, and Tier-2 page escalation
     # skips with a visible degradation rather than posting an image to a
@@ -305,7 +313,14 @@ class Settings(BaseSettings):
         failed on an id the endpoint had never heard of.
         """
         table = MODELS_BY_PROVIDER.get(self.llm_provider, {})
-        for role in ("route", "rewrite", "generate", "verify", "vlm"):
+        for role in (
+            "route",
+            "rewrite",
+            "generate",
+            "generate_fallback",
+            "verify",
+            "vlm",
+        ):
             field = f"llm_model_{role}"
             if not getattr(self, field):
                 object.__setattr__(self, field, table.get(role) or "")
