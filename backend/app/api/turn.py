@@ -141,7 +141,16 @@ class TurnRunner:
 
         # -- rewrite (raw retrieval fires concurrently inside this node)
         async for frame in self._stage(
-            "rewrite", state, nodes.rewrite_node, lambda s: {"rewritten": s.get("rewritten", False)}
+            "rewrite",
+            state,
+            nodes.rewrite_node,
+            lambda s: {
+                "rewritten": s.get("rewritten", False),
+                # >1 means the message asked distinct things and was split, so
+                # the UI can say "searching for 3 things" rather than implying
+                # one search happened.
+                "sub_queries": len(s.get("effective_queries") or [1]),
+            },
         ):
             yield frame
 
@@ -232,7 +241,9 @@ class TurnRunner:
         self, state: QueryState, message_id: str
     ) -> AsyncIterator[str]:
         settings = get_settings()
-        top = state.get("candidates", [])[: settings.rerank_top_n]
+        # Same budget the prompt was built from, so citation markers and the
+        # citations list cannot disagree about which chunk is [n].
+        top = state.get("candidates", [])[: nodes.context_budget(state, settings)]
         messages, chunk_ids = nodes.build_generate_messages(state)
 
         attempt = state.get("attempt", 0)

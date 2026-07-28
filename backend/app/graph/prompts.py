@@ -75,6 +75,12 @@ Rules about answering:
 - Cite every factual claim with the marker of the block it came from, written as
   [1], [2], and so on. Place the marker immediately after the claim it supports.
 - A sentence drawing on two blocks cites both: [1][2].
+- Synthesise across blocks. Related facts often sit in different documents; when
+  they do, combine them into one answer rather than reporting each separately.
+- ANSWER EVERY PART. If the question asks several things, address each one. If
+  the documents cover some parts and not others, answer the parts you can and
+  say plainly which parts are not covered — do not silently drop a part, and do
+  not let a well-supported part imply the others were answered too.
 - If the documents do not contain the answer, say so plainly. Do not guess, and
   do not pad a thin answer to look complete.
 - Be direct. Lead with the answer, then the supporting detail.
@@ -178,21 +184,39 @@ def build_route_messages(query: str, recent_turns: Sequence[Turn]) -> str:
 # ---------------------------------------------------------------- rewrite
 
 REWRITE_SYSTEM = """\
-You rewrite a follow-up question into a standalone search query.
+You turn a user's message into one or more standalone search queries.
 
-Return JSON only: {"query": "<rewritten query>"}
+Return JSON only: {"queries": ["<query>", ...]}
 
-Resolve pronouns and references by substituting the LITERAL earlier wording.
+Two jobs, in this order:
 
-Critical constraints:
+1. RESOLVE REFERENCES. Replace pronouns and back-references with the LITERAL
+   earlier wording from the conversation.
+
+2. SPLIT DISTINCT ASKS. If the message asks several things that would be
+   answered by different passages, return one query per ask. If it asks one
+   thing, return exactly one query.
+
+   Split: "Who is Ronak? What are his qualifications?"
+     -> ["Who is Ronak", "Ronak qualifications"]
+   Do NOT split: "What are the causes and effects of the Q3 outage?"
+     -> ["causes and effects of the Q3 outage"]
+   The test is whether the parts would be found in different places, not whether
+   the sentence contains more than one clause. Over-splitting scatters retrieval
+   across passages that each answer a fragment of the question.
+
+   Return at most 4 queries.
+
+Critical constraints on every query:
 - Preserve entity names, identifiers, error codes, version numbers, file names
   and technical terms EXACTLY as they appeared. Do not paraphrase them, expand
   abbreviations, correct spelling, or normalise terminology.
-- Do not add words that were not in the conversation. Do not make the query more
-  general or more specific than it was.
-- If the message is already standalone, return it unchanged.
+- Do not add words that were not in the conversation, and do not make a query
+  more general or more specific than the user's wording.
+- If the message is already a single standalone question, return it unchanged as
+  a one-element list.
 
-Why the constraints are strict: this query goes to a keyword search as well as a
+Why the constraints are strict: these queries go to a keyword search as well as a
 semantic one. Rewriting "the ZX9-4471 valve" as "the pressure valve" resolves the
 reference and silently destroys the exact-match retrieval that would have found
 it.

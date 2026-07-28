@@ -150,7 +150,7 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
     """
     raw_query = state["raw_query"]
 
-    async def _rewrite() -> str:
+    async def _rewrite() -> list[str]:
         result = await deps.llm.complete_json(
             [
                 Message(role="system", content=prompts.REWRITE_SYSTEM),
@@ -164,10 +164,10 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
                 ),
             ],
             model=deps.settings.llm_model_rewrite,
-            max_tokens=256,
+            max_tokens=512,
             timeout=deps.settings.timeout_llm_rewrite_s,
         )
-        return str(result.get("query") or raw_query).strip() or raw_query
+        return _clean_queries(result.get("queries"), raw_query, deps.settings)
 
     rewritten_task = asyncio.create_task(_rewrite())
     raw_task = asyncio.create_task(_search(state, deps, raw_query))
@@ -188,8 +188,7 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
 
     if isinstance(rewrite_result, BaseException):
         logger.warning("rewrite failed, using raw query: %s", rewrite_result)
-        updates["effective_query"] = raw_query
-        updates["rewritten"] = False
+        queries = [raw_query]
         degradations = _degrade(
             state,
             DegradationStage.REWRITE,
@@ -198,11 +197,42 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
             str(rewrite_result)[:200],
         )
     else:
-        updates["effective_query"] = rewrite_result
-        updates["rewritten"] = rewrite_result != raw_query
+        queries = rewrite_result
 
+    updates["effective_queries"] = queries
+    # Cohere takes one query, and the rerank cache is keyed on one string. For a
+    # multi-intent message the whole ask is the right thing to rerank against —
+    # a chunk answering only one part should not outrank one covering two.
+    updates["effective_query"] = queries[0] if len(queries) == 1 else raw_query
+    updates["rewritten"] = queries != [raw_query]
     updates["degradations"] = degradations
     return updates
+
+
+def _clean_queries(
+    raw: object, fallback: str, settings: Settings
+) -> list[str]:
+    """Normalise whatever the model returned into a usable query list.
+
+    Fails open to the original message: every caller of this node is on a path
+    where losing the turn is worse than retrieving with a slightly clumsy query.
+    A model that returns a bare string, an empty list, or duplicates should cost
+    recall at worst, never the answer.
+    """
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return [fallback]
+
+    seen: list[str] = []
+    for item in raw:
+        text = str(item).strip()
+        # Deduplicate: identical queries would each contribute a rank to the
+        # fusion and inflate their shared chunks for no added evidence.
+        if text and text not in seen:
+            seen.append(text)
+
+    return seen[: settings.max_subqueries] or [fallback]
 
 
 # ----------------------------------------------------------------- retrieve
@@ -303,12 +333,21 @@ async def retrieve_node(state: QueryState, deps: Deps) -> dict:
             "attempt": attempt,
         }
 
-    try:
-        rewritten_candidates = await _search(state, deps, state["effective_query"])
-    except Exception as exc:  # noqa: BLE001
+    # One search per effective query. Usually one — a resolved follow-up — but
+    # several when the message asked distinct things, in which case retrieving
+    # once for the blend surfaces passages answering only the loudest intent.
+    queries = state.get("effective_queries") or [state["effective_query"]]
+    results = await asyncio.gather(
+        *(_search(state, deps, q) for q in queries), return_exceptions=True
+    )
+
+    result_sets = [r for r in results if not isinstance(r, BaseException)]
+    failed = [r for r in results if isinstance(r, BaseException)]
+
+    if failed and not result_sets:
         if raw_candidates:
             # Partial failure is not a 503. Recall is reduced; the turn is not lost.
-            logger.warning("rewritten retrieval failed, using raw only: %s", exc)
+            logger.warning("all rewritten retrievals failed, using raw: %s", failed[0])
             return {
                 "candidates": await _hydrate(state, deps, raw_candidates),
                 "attempt": attempt,
@@ -317,18 +356,33 @@ async def retrieve_node(state: QueryState, deps: Deps) -> dict:
                     DegradationStage.RETRIEVE,
                     DegradationReason.UNAVAILABLE,
                     "raw formulation only",
-                    str(exc)[:200],
+                    str(failed[0])[:200],
                 ),
             }
-        raise
+        raise failed[0]
 
+    degradations = state.get("degradations", [])
+    if failed:
+        degradations = _degrade(
+            state,
+            DegradationStage.RETRIEVE,
+            DegradationReason.UNAVAILABLE,
+            f"{len(result_sets)} of {len(queries)} formulations",
+            f"{len(failed)} sub-query retrieval(s) failed",
+        )
+
+    # Already N-ary — merging raw + rewritten was only ever the N=2 case.
     merged = fuse_formulations(
-        [raw_candidates, rewritten_candidates],
+        [raw_candidates, *result_sets],
         k=deps.settings.rrf_k,
         rank_base=deps.settings.rrf_rank_base,
         limit=deps.settings.retrieve_top_k,
     )
-    return {"candidates": await _hydrate(state, deps, merged), "attempt": attempt}
+    return {
+        "candidates": await _hydrate(state, deps, merged),
+        "attempt": attempt,
+        "degradations": degradations,
+    }
 
 
 # ------------------------------------------------------------------- rerank
@@ -455,8 +509,21 @@ async def generate_node(state: QueryState, deps: Deps) -> dict:
     return {"answer": answer, "citations": []}
 
 
+def context_budget(state: QueryState, settings: Settings | None = None) -> int:
+    """How many chunks to hand the model for this turn.
+
+    Scales with the number of distinct things asked, because a three-part
+    question served the usual top-5 can leave one part with no supporting
+    passage — and the model then answers two thirds of the question while
+    sounding complete. Capped: the limit is attention, not context size.
+    """
+    cfg = settings or get_settings()
+    sub_queries = max(1, len(state.get("effective_queries") or [1]))
+    return min(cfg.rerank_top_n * sub_queries, cfg.max_context_chunks)
+
+
 def build_generate_messages(state: QueryState) -> tuple[list[Message], list[str]]:
-    candidates = state.get("candidates", [])[: get_settings().rerank_top_n]
+    candidates = state.get("candidates", [])[: context_budget(state)]
     user_message, chunk_ids = prompts.build_generate_user_message(
         state.get("effective_query", state["raw_query"]),
         candidates,

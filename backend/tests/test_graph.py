@@ -150,7 +150,7 @@ async def test_route_fails_open_on_garbage_route_value() -> None:
 async def test_rewrite_runs_raw_retrieval_in_parallel() -> None:
     """The rewrite's latency is hidden behind a query that had to happen anyway."""
     store = StubStore(hits=[])
-    deps = make_deps(llm=StubLLM({"query": "what is the Q3 revenue?"}), store=store)
+    deps = make_deps(llm=StubLLM({"queries": ["what is the Q3 revenue?"]}), store=store)
 
     result = await rewrite_node(state(), deps)
 
@@ -170,7 +170,7 @@ async def test_rewrite_fails_open_to_the_raw_query() -> None:
 
 async def test_unchanged_rewrite_is_not_marked_rewritten() -> None:
     """Nothing to resolve means no second Qdrant call downstream."""
-    deps = make_deps(llm=StubLLM({"query": "what is the revenue?"}))
+    deps = make_deps(llm=StubLLM({"queries": ["what is the revenue?"]}))
     result = await rewrite_node(state(), deps)
     assert result["rewritten"] is False
 
@@ -458,3 +458,118 @@ def test_graph_compiles_with_the_contract_node_names() -> None:
         assert name in nodes
     for terminal in ("history", "refuse", "abstain"):
         assert terminal in nodes
+
+
+# ------------------------------------------------- multi-intent decomposition
+
+
+async def test_multi_intent_message_is_split_into_queries() -> None:
+    """One embedding of three questions is a blend of three intents, and tends
+    to surface passages answering only the loudest one."""
+    deps = make_deps(
+        llm=StubLLM({"queries": ["Who is Ronak", "Ronak qualifications"]})
+    )
+    result = await rewrite_node(state(raw_query="Who is Ronak? What are his qualifications?"), deps)
+
+    assert result["effective_queries"] == ["Who is Ronak", "Ronak qualifications"]
+    assert result["rewritten"] is True
+
+
+async def test_single_intent_stays_one_query() -> None:
+    deps = make_deps(llm=StubLLM({"queries": ["what is the revenue?"]}))
+    result = await rewrite_node(state(), deps)
+    assert result["effective_queries"] == ["what is the revenue?"]
+    assert result["rewritten"] is False
+
+
+async def test_rerank_query_is_the_whole_ask_when_split() -> None:
+    """Cohere takes one query. A chunk answering one part must not outrank one
+    covering two, so the full original message is what gets reranked."""
+    raw = "Who is Ronak? What are his qualifications?"
+    deps = make_deps(llm=StubLLM({"queries": ["Who is Ronak", "Ronak qualifications"]}))
+    result = await rewrite_node(state(raw_query=raw), deps)
+    assert result["effective_query"] == raw
+
+
+def test_query_cleaning_fails_open_and_deduplicates() -> None:
+    from app.graph.nodes import _clean_queries
+
+    cfg = Settings(max_subqueries=4)
+    assert _clean_queries(None, "fallback", cfg) == ["fallback"]
+    assert _clean_queries([], "fallback", cfg) == ["fallback"]
+    assert _clean_queries("bare string", "fallback", cfg) == ["bare string"]
+    # Duplicates would each contribute a rank to the fusion and inflate their
+    # shared chunks without adding evidence.
+    assert _clean_queries(["a", "a", "b"], "f", cfg) == ["a", "b"]
+    assert _clean_queries(["a", "b", "c", "d", "e", "f"], "x", cfg) == ["a", "b", "c", "d"]
+
+
+async def test_every_sub_query_is_retrieved_and_fused() -> None:
+    searched: list[str] = []
+
+    class Recording(StubStore):
+        async def hybrid_search(self, query, **kw):
+            return self.hits
+
+        async def branch_search(self, query, *, branch, **kw):
+            return self.hits
+
+    class RecordingEmbedder(StubEmbedder):
+        def embed_query(self, text):
+            searched.append(text)
+            return object()
+
+    deps = make_deps(store=Recording(hits=[]), embedder=RecordingEmbedder())
+    await retrieve_node(
+        state(
+            rewritten=True,
+            effective_queries=["who is ronak", "ronak qualifications"],
+            raw_candidates=[candidate(1)],
+        ),
+        deps,
+    )
+
+    assert set(searched) == {"who is ronak", "ronak qualifications"}
+
+
+async def test_one_failed_sub_query_degrades_rather_than_losing_the_turn() -> None:
+    calls = {"n": 0}
+
+    class Flaky(StubStore):
+        async def hybrid_search(self, query, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("qdrant hiccup")
+            return self.hits
+
+    deps = make_deps(store=Flaky(hits=[]))
+    result = await retrieve_node(
+        state(
+            rewritten=True,
+            effective_queries=["a", "b"],
+            raw_candidates=[candidate(1)],
+        ),
+        deps,
+    )
+
+    assert result["candidates"], "the surviving formulations still answer the turn"
+    assert any("formulations" in d.fallback for d in result["degradations"])
+
+
+def test_context_budget_scales_with_sub_queries_but_is_capped() -> None:
+    """A three-part question served the usual top-5 can leave one part with no
+    supporting passage — but the cap matters too, because the limit is attention,
+    not context size."""
+    from app.graph.nodes import context_budget
+
+    cfg = Settings(rerank_top_n=5, max_context_chunks=12)
+
+    assert context_budget(state(effective_queries=["a"]), cfg) == 5
+    assert context_budget(state(effective_queries=["a", "b"]), cfg) == 10
+    assert context_budget(state(effective_queries=["a", "b", "c"]), cfg) == 12
+    assert context_budget(state(effective_queries=["a", "b", "c", "d"]), cfg) == 12
+
+
+def test_generate_prompt_requires_answering_every_part() -> None:
+    assert "ANSWER EVERY PART" in prompts.GENERATE_SYSTEM
+    assert "Synthesise across blocks" in prompts.GENERATE_SYSTEM

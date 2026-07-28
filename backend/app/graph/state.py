@@ -52,6 +52,16 @@ class QueryState(TypedDict, total=False):
     route: Route
 
     # -- rewriting
+    #
+    # `effective_queries` is the list actually retrieved with — one entry for an
+    # ordinary question, several when the user asked distinct things in one
+    # message ("Who is Ronak? What are his qualifications?"). Retrieving once for
+    # a multi-intent message embeds a blend of every intent and tends to surface
+    # passages answering only the loudest one.
+    #
+    # `effective_query` stays a single string for the things that need exactly
+    # one — Cohere's rerank input and the rerank cache key.
+    effective_queries: list[str]
     effective_query: str
     rewritten: bool
     # The raw-query result set, fetched in parallel with the rewrite call so the
@@ -94,6 +104,7 @@ def initial_state(
         recent_turns=recent_turns or [],
         rolling_summary=rolling_summary,
         entity_ledger=entity_ledger or {},
+        effective_queries=[raw_query],
         effective_query=raw_query,
         rewritten=False,
         raw_candidates=[],

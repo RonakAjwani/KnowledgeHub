@@ -123,6 +123,22 @@ class Settings(BaseSettings):
     retrieve_top_k: int = 40  # retrieve wide, compress late
     rerank_top_n: int = 5
 
+    # A message can ask several distinct things at once ("Who is X? What are
+    # their qualifications?"). Each gets its own retrieval, fused by the same
+    # nested RRF used for raw-vs-rewritten. Capped because sub-queries multiply
+    # Qdrant calls and every extra one buys less than the last.
+    max_subqueries: int = 4
+
+    # Ceiling on chunks handed to the model when a message was split.
+    #
+    # Passing the usual top-5 for a three-part question risks one part getting
+    # no supporting chunk at all, so the budget scales with the number of
+    # sub-queries — but only to a point. The binding constraint is *not* the
+    # context window (1M tokens; twelve parent windows is under 2% of it) but
+    # attention: past a dozen passages a model gets measurably worse at using
+    # any of them. See "When More Documents Hurt RAG" (arXiv 2606.11350).
+    max_context_chunks: int = 12
+
     # Skip the reranker when fusion is already decisive. Cross-branch agreement
     # is the real signal: when dense and sparse independently rank the same chunk
     # first, a cross-encoder is unlikely to overturn it, so the call buys nothing
