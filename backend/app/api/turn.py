@@ -59,9 +59,20 @@ class TurnRunner:
         turn_id = str(uuid.uuid4())
 
         # Always first, and before anything that can fail: the client keys its
-        # optimistic UI to this id.
+        # optimistic UI to these ids.
+        #
+        # `conversation_id` is what makes multi-turn memory reachable. A client
+        # that starts a fresh conversation has no id to send, so the server mints
+        # one — and without it on the wire the client can never learn what it
+        # was, meaning every turn silently starts a new conversation and
+        # follow-up questions lose their history.
         yield self.stream.frame(
-            "turn.start", {"turn_id": turn_id, "message_id": message_id}
+            "turn.start",
+            {
+                "turn_id": turn_id,
+                "message_id": message_id,
+                "conversation_id": state["conversation_id"],
+            },
         )
 
         try:

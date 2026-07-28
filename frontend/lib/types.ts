@@ -135,6 +135,12 @@ export interface PipelineStageDetail {
 export interface TurnStartEvent extends FrameEnvelope {
   turn_id: string;
   message_id: string;
+  /**
+   * The conversation this turn belongs to — minted by the server on a first
+   * turn. Send it back on the next turn to thread conversation memory; without
+   * it every turn starts a fresh conversation and follow-ups lose their history.
+   */
+  conversation_id: string;
 }
 
 export interface PipelineStageEvent extends FrameEnvelope {

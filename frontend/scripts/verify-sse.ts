@@ -121,6 +121,73 @@ async function main(): Promise<number> {
   ];
   failures += results.filter((ok) => !ok).length;
 
+  // -- multi-turn: the brief's stated trap ----------------------------------
+  //
+  // "Follow-up questions should work" is the requirement most easily faked:
+  // each turn looks correct in isolation while the conversation has no memory
+  // at all. The test is a pronoun — "it" is meaningless without the prior turn.
+  console.log("\nmulti-turn:");
+  let conversationId: string | null = null;
+  for await (const event of streamChat(API, {
+    message: "What does the ZX9-4471 valve do?",
+  })) {
+    if (event.type === "turn.start") conversationId = event.data.conversation_id;
+  }
+  failures += check(
+    "turn.start reports the conversation id",
+    Boolean(conversationId),
+    conversationId ?? "(missing)",
+  )
+    ? 0
+    : 1;
+
+  // Checking only the answer text is a false positive waiting to happen: "What
+  // error code does it raise?" contains "error code", which BM25 finds in the
+  // document on its own — the turn looks like memory working when it is just
+  // keyword retrieval. So the assertion is on the *rewrite*, which is the only
+  // stage that can resolve "it" and can only do so from conversation history.
+  let followUp = "";
+  let rewritten = false;
+  let threadedConversationId: string | null = null;
+  for await (const event of streamChat(API, {
+    message: "What error code does it raise?",
+    conversation_id: conversationId,
+  })) {
+    if (event.type === "turn.start") {
+      threadedConversationId = event.data.conversation_id;
+    }
+    if (
+      event.type === "pipeline.stage" &&
+      event.data.node === "rewrite" &&
+      event.data.state === "done"
+    ) {
+      rewritten = Boolean(event.data.detail?.rewritten);
+    }
+    if (event.type === "answer.delta") followUp += event.data.text;
+  }
+
+  failures += check(
+    "follow-up stays in the same conversation",
+    threadedConversationId === conversationId,
+    `${threadedConversationId} vs ${conversationId}`,
+  )
+    ? 0
+    : 1;
+  failures += check(
+    "rewrite resolved the pronoun from history",
+    rewritten,
+    rewritten ? "'it' was substituted" : "no rewrite — memory did not reach the node",
+  )
+    ? 0
+    : 1;
+  failures += check(
+    "follow-up answered correctly",
+    /E-1180/.test(followUp),
+    followUp.slice(0, 90),
+  )
+    ? 0
+    : 1;
+
   // -- cleanup --------------------------------------------------------------
   await fetch(`${API}/documents/${doc.id}`, { method: "DELETE" });
 

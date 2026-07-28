@@ -404,7 +404,7 @@ Exactly one terminal event per stream.
 
 | Event | Payload | Notes |
 |---|---|---|
-| `turn.start` | `{turn_id, message_id}` | **Always first.** Lets the client key optimistic UI to a server id |
+| `turn.start` | `{turn_id, message_id, conversation_id}` | **Always first.** Lets the client key optimistic UI to a server id. `conversation_id` added 2026-07-28 — without it a client that starts a fresh conversation never learns the id the server minted, so every turn opens a new conversation and multi-turn memory is unreachable from the UI even though the backend implements it correctly |
 | `pipeline.stage` | `{node, state, attempt, detail?}` | Generic on purpose — adding a node must not break the contract. `node` ∈ `route\|rewrite\|retrieve\|rerank\|grade\|generate`; `state` ∈ `started\|done` |
 | `retrieval.result` | `{candidate_count, documents:[{doc_id, filename, hits}], attempt}` | Drives *"searching 12 sources → found 5"*. The one stage event with a bespoke shape, because the UI renders it directly |
 | `answer.delta` | `{text}` | Token chunk. Only between `pipeline.stage{generate,started}` and a terminal event |

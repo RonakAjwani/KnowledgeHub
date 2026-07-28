@@ -255,3 +255,16 @@ async def test_error_frame_carries_a_request_id() -> None:
     )
     events = parse([f async for f in runner.run()])
     assert events[0][1]["request_id"] == "r1"
+
+
+async def test_turn_start_carries_the_conversation_id() -> None:
+    """Without it, a client that starts a fresh conversation never learns the id
+    the server minted — so every turn opens a new conversation and multi-turn
+    memory is unreachable even though the backend implements it."""
+    runner = FakeRunner(
+        [("turn.start", {"turn_id": "t", "message_id": "m", "conversation_id": "conv-1"})]
+    )
+    events = parse([f async for f in runner.run()])
+
+    assert events[0][0] == "turn.start"
+    assert events[0][1]["conversation_id"] == "conv-1"

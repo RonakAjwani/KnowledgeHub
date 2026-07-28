@@ -89,6 +89,15 @@ interface ChatStreamState {
   phase: ChatPhase;
   turnId: string | null;
   messageId: string | null;
+  /**
+   * Learned from `turn.start` and sent back on every later turn.
+   *
+   * Deliberately survives `start` — it belongs to the conversation, not the
+   * turn. Clearing it between turns would make each message open a new
+   * conversation, which is how multi-turn memory silently stops working while
+   * every individual answer still looks correct.
+   */
+  conversationId: string | null;
   answer: string;
   citations: Citation[];
   stages: StageRecord[];
@@ -122,9 +131,12 @@ export interface UseChatStreamOptions {
   /** `null`/empty searches every ready document — the contract's default. */
   selectedDocIds?: string[];
   /**
-   * Threads conversation memory. The SSE contract does not currently return a
-   * conversation id on any frame, so a caller can only supply one it already
-   * holds (e.g. from `GET /conversations`).
+   * Pins the hook to an existing conversation — e.g. one resumed from
+   * `GET /conversations`.
+   *
+   * Usually unnecessary: the hook learns the id from `turn.start` and threads
+   * subsequent turns automatically. Supplying it here takes precedence, which
+   * is what lets a sidebar switch conversations.
    */
   conversationId?: string | null;
   apiUrl?: string;
@@ -134,6 +146,7 @@ const INITIAL: ChatStreamState = {
   phase: "idle",
   turnId: null,
   messageId: null,
+  conversationId: null,
   answer: "",
   citations: [],
   stages: [],
@@ -164,6 +177,7 @@ function reduceEvent(
         ...state,
         turnId: event.data.turn_id,
         messageId: event.data.message_id,
+        conversationId: event.data.conversation_id,
       };
 
     case "pipeline.stage": {
@@ -286,9 +300,15 @@ function reduceEvent(
 function reduce(state: ChatStreamState, action: Action): ChatStreamState {
   switch (action.type) {
     case "reset":
+      // Reset means "new conversation", so the id goes too.
       return INITIAL;
     case "start":
-      return { ...INITIAL, phase: "streaming" };
+      // A new *turn* clears the previous turn's answer, stages and citations —
+      // but NOT the conversation id, which identifies the thread the turn joins.
+      // Dropping it here would send `conversation_id: null` on every message,
+      // opening a fresh conversation each time. Every individual answer would
+      // still look right; only the follow-ups would quietly lose their history.
+      return { ...INITIAL, phase: "streaming", conversationId: state.conversationId };
     case "event":
       return reduceEvent(state, action.event);
     case "failed":
@@ -476,7 +496,12 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
           apiUrl ?? API_URL,
           {
             message: text,
-            conversation_id: conversationId ?? null,
+            // An explicitly supplied id wins (a sidebar switching conversations);
+            // otherwise use the one learned from the previous turn's
+            // `turn.start`. Null only on the very first turn, where the server
+            // mints one and reports it back.
+            conversation_id:
+              conversationId ?? stateRef.current.conversationId ?? null,
             // `null` means "every ready document" per the contract; an empty
             // array would be a request to search nothing.
             selected_doc_ids:
@@ -530,6 +555,9 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     phase: state.phase,
     turnId: state.turnId,
     messageId: state.messageId,
+    // Exposed so a conversation sidebar can show which thread is live; the hook
+    // threads turns on its own without the caller touching this.
+    conversationId: state.conversationId,
     answer: state.answer,
     citations: state.citations,
     stages: state.stages,
