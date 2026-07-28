@@ -63,7 +63,7 @@ function CitationChipImpl({ citation, onClick, className }: CitationChipProps) {
       className={cn(
         "mx-px inline-flex translate-y-[-1px] items-center gap-0.5 rounded-md px-1.5 py-0 align-middle",
         "text-[0.7rem] font-medium leading-[1.4] tabular-nums transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
         verified === true &&
           "border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 dark:hover:bg-emerald-900/60",
         verified === false &&

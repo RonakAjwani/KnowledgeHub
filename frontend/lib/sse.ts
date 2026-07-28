@@ -124,6 +124,9 @@ export async function* streamChat(
   request: {
     message: string;
     conversation_id?: string | null;
+    /** Tags a brand-new conversation with the workspace it started in; ignored
+     * once `conversation_id` is set — a conversation cannot switch workspaces. */
+    workspace_id?: string | null;
     selected_doc_ids?: string[] | null;
   },
   options: StreamOptions = {},

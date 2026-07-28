@@ -30,19 +30,32 @@ import {
 
 import { CitationChip } from "@/components/CitationChip";
 import { DegradationBanner } from "@/components/DegradationBanner";
-import { PipelineIndicator } from "@/components/PipelineIndicator";
+import { PipelineIndicator, PipelineShimmer } from "@/components/PipelineIndicator";
 import { Button } from "@/components/ui/button";
 import {
   useChatStream,
   type AbstainInfo,
   type ChatStreamError,
 } from "@/hooks/useChatStream";
-import type { Citation, Degradation } from "@/lib/types";
+import { useSessionToken } from "@/hooks/useSessionToken";
+import { api } from "@/lib/api";
+import type { Citation, Degradation, PersistedMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export interface ChatPaneProps {
   selectedDocIds: string[];
   onCitationClick: (citation: Citation) => void;
+  /** Tags a brand-new conversation so it defaults to this workspace's own
+   * documents and shows up filed under it. `null` = no workspace context. */
+  workspaceId: string | null;
+  /**
+   * Which thread this pane shows. `null` means "a fresh, unsaved chat" — the
+   * moment the first turn lands, the server mints an id and `onConversationStarted`
+   * reports it so the sidebar can list it. A non-null value loads that
+   * conversation's history before anything else renders.
+   */
+  conversationId: string | null;
+  onConversationStarted?: (conversationId: string) => void;
 }
 
 interface UserTurn {
@@ -64,6 +77,28 @@ interface AssistantTurn {
 }
 
 type Turn = UserTurn | AssistantTurn;
+
+/**
+ * A reloaded message becomes a turn exactly like a live one does. An abstain
+ * has no separate representation once persisted — `abstain_node` writes its
+ * refusal text as the message's own `content`, so it already reads as a plain,
+ * honest answer bubble without needing the live-only `AbstainCard` styling.
+ */
+function messageToTurn(message: PersistedMessage): Turn {
+  if (message.role === "user") {
+    return { id: message.id, role: "user", content: message.content };
+  }
+  return {
+    id: message.id,
+    role: "assistant",
+    content: message.content,
+    citations: message.citations,
+    degradations: message.degradations,
+    abstain: null,
+    error: null,
+    stopped: false,
+  };
+}
 
 // --------------------------------------------------------- answer rendering
 
@@ -255,7 +290,7 @@ function ErrorCard({ error }: { error: ChatStreamError }) {
 function UserBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-blue-600 px-3.5 py-2 text-sm text-white shadow-sm dark:bg-blue-700">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent-100 px-3.5 py-2 text-sm text-zinc-900 shadow-sm dark:bg-accent-950/50 dark:text-zinc-100">
         {content}
       </div>
     </div>
@@ -299,9 +334,17 @@ function AssistantBubble({
 
 // -------------------------------------------------------------------- pane
 
-export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
+export function ChatPane({
+  selectedDocIds,
+  onCitationClick,
+  workspaceId,
+  conversationId,
+  onConversationStarted,
+}: ChatPaneProps) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showTrace, setShowTrace] = useState(false);
   /**
    * doc_id → filename, learned from `retrieval.result`. The scope line only
    * receives ids, and this pane deliberately does not fetch the document list
@@ -314,6 +357,7 @@ export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const getToken = useSessionToken();
 
   const {
     send,
@@ -325,7 +369,71 @@ export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
     stages,
     retrieval,
     degradations,
-  } = useChatStream({ selectedDocIds });
+    conversationId: liveConversationId,
+  } = useChatStream({ selectedDocIds, workspaceId, conversationId });
+
+  // The server only mints an id on a brand-new conversation's first turn — the
+  // sidebar has nothing to list or highlight until this fires.
+  const reportedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!liveConversationId || liveConversationId === reportedRef.current) return;
+    reportedRef.current = liveConversationId;
+    onConversationStarted?.(liveConversationId);
+  }, [liveConversationId, onConversationStarted]);
+
+  /**
+   * Reset the visible turn list the instant `conversationId` changes, during
+   * render rather than in an effect — the pattern React's own docs recommend
+   * for "adjust state when a prop changes" ("You Might Not Need an Effect"),
+   * and the only one that satisfies `react-hooks/set-state-in-effect`: that
+   * rule exists because a synchronous reset inside an effect runs one paint
+   * late, so old turns flash before the empty list does.
+   *
+   * Compared against `liveConversationId`, not just the previous prop value:
+   * the parent echoes this pane's own freshly-minted id back down (to
+   * highlight it in the sidebar), and without this comparison that echo would
+   * look identical to "the user switched conversations" and wipe the very
+   * turns that streamed the id into existence.
+   */
+  const [historyForId, setHistoryForId] = useState(conversationId);
+  if (conversationId !== historyForId) {
+    setHistoryForId(conversationId);
+    if (conversationId !== liveConversationId) {
+      setTurns([]);
+      setLoadingHistory(conversationId !== null);
+    }
+  }
+
+  // The genuine side effects of a real switch — aborting whatever the live
+  // stream hook was doing, and fetching the newly-selected conversation's
+  // history — stay in an effect. Guarded the same way as the render-time
+  // reset above, so the self-authored echo does not abort its own stream.
+  useEffect(() => {
+    if (conversationId === liveConversationId) return;
+    reset();
+    if (!conversationId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await getToken();
+        const detail = await api.getConversation(conversationId, token);
+        if (cancelled) return;
+        setTurns(detail.messages.map(messageToTurn));
+      } catch {
+        // The conversation may since have been deleted, or the fetch may have
+        // raced a slow network — either way, an empty pane is the honest
+        // fallback rather than a crash.
+        if (!cancelled) setTurns([]);
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, liveConversationId, getToken, reset]);
 
   // Derived, not synced. Filenames are a pure function of the retrieval events
   // already in state, so mirroring them into their own state via an effect would
@@ -365,6 +473,7 @@ export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
       { id: userTurnId, role: "user", content: text },
     ]);
     setDraft("");
+    setShowTrace(false);
     stickToBottom.current = true;
 
     const result = await send(text);
@@ -497,6 +606,12 @@ export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
           </div>
         ) : null}
 
+        {loadingHistory ? (
+          <p className="shimmer-text text-sm font-medium">
+            Loading conversation…
+          </p>
+        ) : null}
+
         {turns.map((turn) =>
           turn.role === "user" ? (
             <UserBubble key={turn.id} content={turn.content} />
@@ -511,7 +626,20 @@ export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
 
         {showLiveTurn ? (
           <div className="max-w-[95%] space-y-2">
-            {isStreaming ? (
+            {/* The shimmer fills the gap before any token has arrived — once the
+                answer starts streaming, the appearing text is itself the signal
+                that something is happening, so the line steps aside rather than
+                shimmering alongside live text. An already-expanded trace stays
+                open, though: a user who asked to see the detail keeps it. */}
+            {isStreaming && answer.length === 0 ? (
+              <PipelineShimmer
+                stages={stages}
+                expanded={showTrace}
+                onToggle={() => setShowTrace((v) => !v)}
+              />
+            ) : null}
+
+            {isStreaming && showTrace ? (
               <PipelineIndicator stages={stages} retrieval={retrieval} />
             ) : null}
 
@@ -545,7 +673,7 @@ export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
             aria-label="Message"
             className={cn(
               "max-h-40 min-h-[2.5rem] flex-1 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm",
-              "text-zinc-900 placeholder:text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+              "text-zinc-900 placeholder:text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
               "dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500",
             )}
           />
@@ -562,6 +690,7 @@ export function ChatPane({ selectedDocIds, onCitationClick }: ChatPaneProps) {
             </Button>
           ) : (
             <Button
+              variant="accent"
               onClick={() => void submit()}
               disabled={draft.trim().length === 0}
               aria-label="Send message"

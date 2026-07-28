@@ -58,6 +58,7 @@ export interface DocumentSummary {
   chunk_count: number;
   sanitization_report: SanitizationReport | Record<string, never>;
   extraction: ExtractionSignal | Record<string, never>;
+  workspace_id: string | null;
   created_at: string | null;
 }
 
@@ -227,14 +228,18 @@ export type IngestEvent =
 
 // -------------------------------------------------------------- messages
 
-export interface PersistedCitation {
-  marker: number;
-  chunk_id: string;
-  doc_id: string;
+/**
+ * A citation as it comes back from `GET /conversations/{id}` — the same shape
+ * a live turn's `Citation` has, plus the retrieval-trace columns
+ * (`rank`/`fused_score`/`rerank_score`) that only `message_citations` carries.
+ * Reloading a past conversation must produce citation chips that click through
+ * to a source exactly like a fresh answer's do, which is why this is a
+ * superset of `Citation` rather than a separate, thinner shape.
+ */
+export interface PersistedCitation extends Citation {
   rank: number;
   fused_score: number | null;
   rerank_score: number | null;
-  verified: boolean | null;
 }
 
 export interface PersistedMessage {
@@ -250,7 +255,23 @@ export interface PersistedMessage {
 export interface Conversation {
   id: string;
   title: string | null;
+  workspace_id: string | null;
   created_at: string | null;
+}
+
+// ----------------------------------------------------------- workspaces
+
+/**
+ * A named group of documents that many conversations share — upload once,
+ * open as many chats against it as you like without re-attaching files.
+ */
+export interface Workspace {
+  id: string;
+  name: string;
+  document_count: number;
+  conversation_count: number;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 // ------------------------------------------------------------ error shape

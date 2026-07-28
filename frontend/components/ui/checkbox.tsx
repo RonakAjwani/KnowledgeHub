@@ -31,9 +31,9 @@ export function Checkbox({
       ref={ref}
       type="checkbox"
       className={cn(
-        "size-4 shrink-0 cursor-pointer rounded border-zinc-300 accent-blue-600",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1",
-        "focus-visible:ring-offset-white dark:border-zinc-600 dark:accent-blue-500 dark:focus-visible:ring-offset-zinc-950",
+        "size-4 shrink-0 cursor-pointer rounded border-zinc-300 [accent-color:var(--color-accent-600)]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-1",
+        "focus-visible:ring-offset-white dark:border-zinc-600 dark:[accent-color:var(--color-accent-500)] dark:focus-visible:ring-offset-zinc-950",
         "disabled:cursor-not-allowed disabled:opacity-40",
         className,
       )}

@@ -1,26 +1,136 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/**
+ * Warm cream-to-charcoal ramp, replacing Tailwind's default zinc/neutral/white/
+ * black scales rather than hand-editing every className that already uses them.
+ *
+ * The existing components (ChatPane, DocumentManager, SourcePane,
+ * PipelineIndicator, CitationChip) were written against `zinc-*`/`neutral-*`/
+ * `white`/`black` utilities, light and dark variants both. Tailwind v4 resolves
+ * every one of those classes from a CSS custom property — `bg-zinc-50` reads
+ * `--color-zinc-50` — so redefining the ramp here retints the whole app in one
+ * file. The alternative was hand-editing several hundred className strings
+ * across ~3000 lines to get the same warm palette the mockups specify, which
+ * would only introduce typos and drop a few spots. Status colours (emerald for
+ * verified, amber for unsupported/warnings, red for destructive actions) are
+ * left as Tailwind's defaults — they carry a specific meaning, not a spot in
+ * the neutral scale, and retinting them would blur that meaning.
+ *
+ * The ramp is symmetric on purpose: low numbers are light (cream), high
+ * numbers are dark (charcoal), which is the convention every component already
+ * assumes (`bg-zinc-50 dark:bg-zinc-900`, `text-zinc-900 dark:text-zinc-100`).
+ * That convention is what lets one ramp serve both modes correctly.
+ */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
+
+  --color-white: #fffdfa;
+  --color-black: #1a1712;
+
+  --color-zinc-50: #faf7f2;
+  --color-zinc-100: #f3eee5;
+  --color-zinc-200: #e8e0d2;
+  --color-zinc-300: #d9cdb8;
+  --color-zinc-400: #b7a892;
+  --color-zinc-500: #93856f;
+  --color-zinc-600: #756a58;
+  --color-zinc-700: #5b5245;
+  --color-zinc-800: #423b31;
+  --color-zinc-900: #2b2620;
+  --color-zinc-950: #1c1813;
+
+  --color-neutral-50: var(--color-zinc-50);
+  --color-neutral-100: var(--color-zinc-100);
+  --color-neutral-200: var(--color-zinc-200);
+  --color-neutral-300: var(--color-zinc-300);
+  --color-neutral-400: var(--color-zinc-400);
+  --color-neutral-500: var(--color-zinc-500);
+  --color-neutral-600: var(--color-zinc-600);
+  --color-neutral-700: var(--color-zinc-700);
+  --color-neutral-800: var(--color-zinc-800);
+  --color-neutral-900: var(--color-zinc-900);
+  --color-neutral-950: var(--color-zinc-950);
+
+  /* Terracotta — the one accent, used deliberately rather than everywhere: the
+     primary action per screen (send, upload, new workspace, sign up), never a
+     background or a body-text colour. */
+  --color-accent-50: #fdf1ea;
+  --color-accent-100: #fbe1d0;
+  --color-accent-200: #f4c2a4;
+  --color-accent-300: #e9a077;
+  --color-accent-400: #dd8a63;
+  --color-accent-500: #cc6b47;
+  --color-accent-600: #b8583a;
+  --color-accent-700: #96452d;
+  --color-accent-950: #3d1d12;
+}
+
+:root {
+  --background: var(--color-zinc-50);
+  --foreground: var(--color-zinc-900);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: var(--color-zinc-950);
+    --foreground: var(--color-zinc-100);
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Shimmer — the pipeline status line while a turn is in flight. A moving
+   highlight sweeps across the text itself (background-clip: text) rather than
+   a separate bar, so the status reads as "the system is thinking" instead of a
+   generic progress indicator. */
+@keyframes shimmer-sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-zinc-400) 0%,
+    var(--color-zinc-400) 40%,
+    var(--color-zinc-800) 50%,
+    var(--color-zinc-400) 60%,
+    var(--color-zinc-400) 100%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-sweep 2.2s linear infinite;
+}
+
+@media (prefers-color-scheme: dark) {
+  .shimmer-text {
+    background-image: linear-gradient(
+      90deg,
+      var(--color-zinc-600) 0%,
+      var(--color-zinc-600) 40%,
+      var(--color-zinc-200) 50%,
+      var(--color-zinc-600) 60%,
+      var(--color-zinc-600) 100%
+    );
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    color: var(--color-zinc-500);
+    background-image: none;
+  }
 }

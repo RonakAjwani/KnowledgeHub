@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 type ButtonVariant =
   | "default"
+  | "accent"
   | "subtle"
   | "outline"
   | "ghost"
@@ -13,13 +14,19 @@ type ButtonSize = "sm" | "md" | "icon";
 
 const BASE =
   "inline-flex shrink-0 items-center justify-center whitespace-nowrap font-medium transition-colors " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-1 " +
   "focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-950 " +
   "disabled:pointer-events-none disabled:opacity-45";
 
 const VARIANTS: Record<ButtonVariant, string> = {
   default:
     "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white",
+  // The one filled-orange action per screen — send, upload, new workspace,
+  // sign up. Reserved for the single most important thing on the page; every
+  // other action uses default/subtle/outline/ghost so the accent keeps meaning
+  // "do this one" rather than becoming decoration.
+  accent:
+    "bg-accent-600 text-white hover:bg-accent-700 dark:bg-accent-500 dark:hover:bg-accent-400",
   subtle:
     "bg-zinc-100 text-zinc-900 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700",
   outline:

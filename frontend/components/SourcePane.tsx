@@ -378,7 +378,7 @@ export function SourcePane({
                       ref={
                         index === firstHighlightIndex ? highlightRef : undefined
                       }
-                      className="rounded-sm bg-blue-200/80 text-inherit ring-1 ring-blue-400/60 dark:bg-blue-500/30 dark:ring-blue-400/40"
+                      className="rounded-sm bg-accent-200/80 text-inherit ring-1 ring-accent-400/60 dark:bg-accent-500/30 dark:ring-accent-400/40"
                     >
                       {inner}
                     </mark>

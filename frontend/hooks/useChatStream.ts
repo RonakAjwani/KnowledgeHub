@@ -23,9 +23,9 @@
  * stream ends, which a `useReducer` dispatch cannot give it.
  */
 
-import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useSessionToken } from "@/hooks/useSessionToken";
 import { API_URL } from "@/lib/api";
 import { StreamHttpError, streamChat } from "@/lib/sse";
 import type {
@@ -36,7 +36,6 @@ import type {
   PipelineStageDetail,
   RetrievalResultEvent,
 } from "@/lib/types";
-import { CLERK_ENABLED } from "@/lib/utils";
 
 // ------------------------------------------------------------------- types
 
@@ -139,6 +138,13 @@ export interface UseChatStreamOptions {
    * is what lets a sidebar switch conversations.
    */
   conversationId?: string | null;
+  /**
+   * Tags a **brand-new** conversation with the workspace it was started from,
+   * so retrieval defaults to that workspace's own documents and the thread
+   * shows up under it on reload. Ignored once a conversation exists — sent
+   * only on the very first turn, when `conversationId` is still null.
+   */
+  workspaceId?: string | null;
   apiUrl?: string;
 }
 
@@ -406,29 +412,6 @@ function snapshot(state: ChatStreamState): ChatTurnResult {
   }
 }
 
-type TokenGetter = () => Promise<string | null>;
-
-function useClerkToken(): TokenGetter {
-  const { getToken } = useAuth();
-  return getToken;
-}
-
-function useAnonymousToken(): TokenGetter {
-  return useCallback(async () => null, []);
-}
-
-/**
- * Picked once at module scope, not per render.
- *
- * `useAuth()` throws outside a `ClerkProvider`, and `CLERK_ENABLED` is a
- * build-time constant — so branching here is a stable choice of hook, not a
- * conditional hook call. Without this the dev-mode build (no publishable key,
- * no provider) crashes on the first render of the chat pane.
- */
-const useSessionToken: () => TokenGetter = CLERK_ENABLED
-  ? useClerkToken
-  : useAnonymousToken;
-
 // --------------------------------------------------------------------- hook
 
 export function useChatStream(options: UseChatStreamOptions = {}) {
@@ -484,7 +467,10 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
 
       apply({ type: "start" });
 
-      const { selectedDocIds, conversationId, apiUrl } = optionsRef.current;
+      const { selectedDocIds, conversationId, workspaceId, apiUrl } =
+        optionsRef.current;
+      const effectiveConversationId =
+        conversationId ?? stateRef.current.conversationId ?? null;
 
       try {
         const token = await getToken();
@@ -500,8 +486,10 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             // otherwise use the one learned from the previous turn's
             // `turn.start`. Null only on the very first turn, where the server
             // mints one and reports it back.
-            conversation_id:
-              conversationId ?? stateRef.current.conversationId ?? null,
+            conversation_id: effectiveConversationId,
+            // Only meaningful on that same first turn — the backend ignores it
+            // once a conversation already exists.
+            workspace_id: effectiveConversationId ? null : (workspaceId ?? null),
             // `null` means "every ready document" per the contract; an empty
             // array would be a request to search nothing.
             selected_doc_ids:

@@ -10,7 +10,6 @@ import {
   useState,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "@clerk/nextjs";
 import {
   CircleCheck,
   FileText,
@@ -26,9 +25,10 @@ import {
   WandSparkles,
 } from "lucide-react";
 
+import { useSessionToken, type TokenGetter } from "@/hooks/useSessionToken";
 import { API_URL, ApiError, api } from "@/lib/api";
 import { streamIngest } from "@/lib/sse";
-import { CLERK_ENABLED, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type {
   DocumentStatus,
   DocumentSummary,
@@ -41,35 +41,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 
-// ------------------------------------------------------------------- auth
-
-type TokenGetter = () => Promise<string | null>;
-
-function useClerkToken(): TokenGetter {
-  const { getToken } = useAuth();
-  return useCallback(() => getToken(), [getToken]);
-}
-
-function useNoToken(): TokenGetter {
-  return useCallback(async () => null, []);
-}
-
-/**
- * Clerk's `useAuth` throws outside a `ClerkProvider`, and a build with no
- * publishable key mounts no provider at all (see `CLERK_ENABLED`). Resolving the
- * branch once at module scope keeps hook order fixed for the lifetime of the
- * process — a conditional call inside the component would not.
- *
- * Duplicated verbatim in `SourcePane.tsx` rather than shared, to keep the two
- * panes independently mountable while the app shell is still being wired.
- */
-const useSessionToken: () => TokenGetter = CLERK_ENABLED
-  ? useClerkToken
-  : useNoToken;
-
 // -------------------------------------------------------------- constants
 
-const DOCUMENTS_KEY = ["documents"] as const;
+/**
+ * `null` workspace still gets its own cache entry, rather than reusing the
+ * pre-workspace key — a stale "everything" list must never appear to satisfy
+ * a query for one specific workspace's files, or a delete/upload in one
+ * workspace would visibly mutate another's list through a shared cache slot.
+ */
+const documentsKey = (workspaceId: string | null) =>
+  ["documents", workspaceId] as const;
 const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown"];
 const TERMINAL_STATUSES: DocumentStatus[] = ["ready", "failed"];
 
@@ -149,6 +130,10 @@ interface LiveState {
 // ------------------------------------------------------------- component
 
 export interface DocumentManagerProps {
+  /** The workspace whose files this panel shows and uploads into. `null`
+   * means no workspace is open yet — the panel renders an empty placeholder
+   * and every mutation is disabled, since there is nowhere to attach a file. */
+  workspaceId: string | null;
   /** Documents retrieval is restricted to. Empty means "search everything". */
   selectedDocIds: string[];
   onSelectionChange: (ids: string[]) => void;
@@ -159,6 +144,7 @@ export interface DocumentManagerProps {
 }
 
 export function DocumentManager({
+  workspaceId,
   selectedDocIds,
   onSelectionChange,
   onOpenDocument,
@@ -172,10 +158,12 @@ export function DocumentManager({
   }, [getToken]);
 
   const queryClient = useQueryClient();
+  const DOCUMENTS_KEY = documentsKey(workspaceId);
 
   const documentsQuery = useQuery({
     queryKey: DOCUMENTS_KEY,
-    queryFn: async () => api.listDocuments(await tokenRef.current()),
+    queryFn: async () => api.listDocuments(workspaceId, await tokenRef.current()),
+    enabled: workspaceId !== null,
   });
 
   const [live, setLive] = useState<Record<string, LiveState>>({});
@@ -276,7 +264,7 @@ export function DocumentManager({
         }
       })();
     },
-    [queryClient],
+    [queryClient, DOCUMENTS_KEY],
   );
 
   useEffect(() => {
@@ -316,7 +304,11 @@ export function DocumentManager({
       // likeliest way to OOM it.
       for (const file of accepted) {
         try {
-          const doc = await api.uploadDocument(file, await tokenRef.current());
+          const doc = await api.uploadDocument(
+            file,
+            workspaceId,
+            await tokenRef.current(),
+          );
           queryClient.setQueryData<DocumentSummary[]>(DOCUMENTS_KEY, (prev) => [
             doc,
             ...(prev ?? []).filter((row) => row.id !== doc.id),
@@ -336,7 +328,7 @@ export function DocumentManager({
 
       void queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY });
     },
-    [queryClient, subscribe],
+    [queryClient, subscribe, workspaceId, DOCUMENTS_KEY],
   );
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -415,11 +407,26 @@ export function DocumentManager({
 
   const busy = uploadingNames.length > 0;
 
+  if (workspaceId === null) {
+    return (
+      <Card className={cn("h-full min-h-0", className)}>
+        <CardHeader>
+          <CardTitle>Context</CardTitle>
+        </CardHeader>
+        <CardContent className="flex min-h-0 flex-1 items-center justify-center p-3">
+          <p className="max-w-[16rem] text-center text-xs text-zinc-500 dark:text-zinc-400">
+            Open a workspace to see and upload the documents it searches.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className={cn("h-full min-h-0", className)}>
       <CardHeader>
         <div className="flex min-w-0 items-center gap-2">
-          <CardTitle>Documents</CardTitle>
+          <CardTitle>Context</CardTitle>
           <Badge variant="outline">{documents.length}</Badge>
         </div>
         <div className="flex items-center gap-1.5">
@@ -471,7 +478,7 @@ export function DocumentManager({
           className={cn(
             "rounded-lg border border-dashed px-4 py-5 text-center transition-colors",
             dragging
-              ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-500/10"
+              ? "border-accent-500 bg-accent-50 dark:border-accent-400 dark:bg-accent-500/10"
               : "border-zinc-300 bg-zinc-50/60 dark:border-zinc-700 dark:bg-zinc-900/40",
           )}
         >
@@ -483,7 +490,7 @@ export function DocumentManager({
             PDF, TXT or Markdown ·{" "}
             <button
               type="button"
-              className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+              className="font-medium text-accent-600 underline-offset-2 hover:underline dark:text-accent-400"
               onClick={() => fileInputRef.current?.click()}
             >
               browse
@@ -535,7 +542,7 @@ export function DocumentManager({
           className={cn(
             "rounded-md border px-2.5 py-2",
             scopeNarrowed
-              ? "border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10"
+              ? "border-accent-300 bg-accent-50 dark:border-accent-500/40 dark:bg-accent-500/10"
               : "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/50",
           )}
         >
@@ -692,9 +699,9 @@ function DocumentRow({
         onKeyDown={handleKeyDown}
         className={cn(
           "group w-full cursor-pointer rounded-lg border p-2.5 text-left transition-colors",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
           active
-            ? "border-blue-400 bg-blue-50/70 dark:border-blue-500/50 dark:bg-blue-500/10"
+            ? "border-accent-400 bg-accent-50/70 dark:border-accent-500/50 dark:bg-accent-500/10"
             : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900",
         )}
       >
@@ -896,9 +903,9 @@ function StageTrail({ status }: { status: DocumentStatus }) {
           className={cn(
             "h-1 flex-1 rounded-full",
             index < current
-              ? "bg-blue-500"
+              ? "bg-accent-500"
               : index === current
-                ? "animate-pulse bg-blue-500"
+                ? "animate-pulse bg-accent-500"
                 : "bg-zinc-200 dark:bg-zinc-800",
           )}
         />

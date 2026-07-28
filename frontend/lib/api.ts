@@ -13,6 +13,7 @@ import type {
   DocumentDetail,
   DocumentSummary,
   PersistedMessage,
+  Workspace,
 } from "./types";
 
 export const API_URL =
@@ -66,19 +67,31 @@ async function request<T>(
 }
 
 export const api = {
-  listDocuments: (token?: string | null) =>
-    request<DocumentSummary[]>("/documents", {}, token),
+  listDocuments: (workspaceId?: string | null, token?: string | null) =>
+    request<DocumentSummary[]>(
+      `/documents${workspaceId ? `?workspace_id=${workspaceId}` : ""}`,
+      {},
+      token,
+    ),
 
   getDocument: (id: string, token?: string | null) =>
     request<DocumentDetail>(`/documents/${id}`, {}, token),
 
   /**
    * Upload returns 201 for a new document and **200 with the existing one** when
-   * the same bytes were already uploaded — re-uploading is not an error.
+   * the same bytes were already uploaded — re-uploading is not an error. The
+   * same bytes uploaded into a *different* workspace is a distinct document,
+   * though: the dedup key includes `workspace_id`, so this never silently
+   * reparents a file that already lives somewhere else.
    */
-  uploadDocument: async (file: File, token?: string | null) => {
+  uploadDocument: async (
+    file: File,
+    workspaceId?: string | null,
+    token?: string | null,
+  ) => {
     const form = new FormData();
     form.append("file", file);
+    if (workspaceId) form.append("workspace_id", workspaceId);
     return request<DocumentSummary>(
       "/documents",
       { method: "POST", body: form },
@@ -89,8 +102,32 @@ export const api = {
   deleteDocument: (id: string, token?: string | null) =>
     request<void>(`/documents/${id}`, { method: "DELETE" }, token),
 
-  listConversations: (token?: string | null) =>
-    request<Conversation[]>("/conversations", {}, token),
+  listConversations: (workspaceId?: string | null, token?: string | null) =>
+    request<Conversation[]>(
+      `/conversations${workspaceId ? `?workspace_id=${workspaceId}` : ""}`,
+      {},
+      token,
+    ),
+
+  listWorkspaces: (token?: string | null) =>
+    request<Workspace[]>("/workspaces", {}, token),
+
+  createWorkspace: (name: string, token?: string | null) =>
+    request<Workspace>(
+      "/workspaces",
+      { method: "POST", body: JSON.stringify({ name }) },
+      token,
+    ),
+
+  renameWorkspace: (id: string, name: string, token?: string | null) =>
+    request<Workspace>(
+      `/workspaces/${id}`,
+      { method: "PUT", body: JSON.stringify({ name }) },
+      token,
+    ),
+
+  deleteWorkspace: (id: string, token?: string | null) =>
+    request<void>(`/workspaces/${id}`, { method: "DELETE" }, token),
 
   getConversation: (id: string, token?: string | null) =>
     request<{ id: string; title: string | null; messages: PersistedMessage[] }>(

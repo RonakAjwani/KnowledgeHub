@@ -18,7 +18,7 @@
  *   the banner explaining what ran instead.
  */
 
-import { Check, Loader2 } from "lucide-react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import type { RetrievalRecord, StageRecord } from "@/hooks/useChatStream";
@@ -228,7 +228,7 @@ function StageRow({
           <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden />
         ) : status === "started" ? (
           <Loader2
-            className="size-3.5 animate-spin text-blue-600 dark:text-blue-400"
+            className="size-3.5 animate-spin text-accent-600 dark:text-accent-400"
             aria-hidden
           />
         ) : (
@@ -257,6 +257,74 @@ function StageRow({
         ) : null}
       </div>
     </li>
+  );
+}
+
+const STEP_LABEL: Record<PipelineNode, string> = {
+  route: "Reading your question",
+  rewrite: "Refining the search",
+  retrieve: "Searching your documents",
+  rerank: "Ranking the best passages",
+  grade: "Checking relevance",
+  generate: "Writing your answer",
+};
+
+export interface PipelineShimmerProps {
+  stages: StageRecord[];
+  expanded: boolean;
+  onToggle: () => void;
+  className?: string;
+}
+
+/**
+ * One shimmering line naming the current step, in place of a blank gap while
+ * the answer is still being assembled — the same shape as Claude's own
+ * in-progress indicator ("Searching…", "Thinking…").
+ *
+ * `stages` is appended to on a node's *first* sighting and patched in place
+ * after that (see the reducer in `useChatStream`), so the last entry is always
+ * the most recently introduced node — which, since the pipeline runs each node
+ * strictly after the last, is also the one presently doing something. That
+ * makes "read the last element" a correct way to find "what's happening right
+ * now" without tracking it separately.
+ *
+ * This is the default view; `PipelineIndicator`'s full per-node trace is one
+ * click away for anyone who wants to see the retry, the margins, the actual
+ * relevance score — the shimmer alone answers "is it still working", not "what
+ * did it decide", and some readers want the second question too.
+ */
+export function PipelineShimmer({
+  stages,
+  expanded,
+  onToggle,
+  className,
+}: PipelineShimmerProps) {
+  const last = stages[stages.length - 1];
+  const label = last ? (STEP_LABEL[last.node] ?? "Working") : "Starting";
+  const isRetry = (last?.attempt ?? 0) > 0;
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      className={cn(
+        "flex items-center gap-1.5 text-left text-sm font-medium",
+        className,
+      )}
+    >
+      <span className="shimmer-text">
+        {label}
+        {isRetry ? " — second pass" : ""}…
+      </span>
+      <ChevronDown
+        className={cn(
+          "size-3.5 shrink-0 text-zinc-400 transition-transform dark:text-zinc-500",
+          expanded && "rotate-180",
+        )}
+        aria-hidden
+      />
+    </button>
   );
 }
 
