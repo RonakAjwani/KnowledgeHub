@@ -188,6 +188,13 @@ class Chunk(BaseModel):
     # paragraph explaining it.
     related_spans: tuple[tuple[int, int], ...] = ()
 
+    # The source document's filename, filled in at hydration. Without it the
+    # model receives a chunk with no idea which document it came from, and
+    # "which of these documents covers X" is unanswerable even when the right
+    # passage is sitting in the context — observed exactly that way against a
+    # corpus containing langchain.md.
+    source_name: str | None = None
+
 
 # ------------------------------------------------------------------- retrieval
 

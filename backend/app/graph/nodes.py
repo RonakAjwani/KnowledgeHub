@@ -30,7 +30,14 @@ from app.config import Settings, get_settings
 from app.graph import prompts
 from app.graph.state import Grade, QueryState, Route
 from app.ingest.embed import Embedder, get_embedder
-from app.llm.client import LLMClient, LLMError, Message, get_llm_client
+from app.llm.client import (
+    LLMClient,
+    LLMError,
+    LLMRateLimited,
+    LLMTimeout,
+    Message,
+    get_llm_client,
+)
 from app.models.schemas import (
     Chunk,
     Degradation,
@@ -38,7 +45,11 @@ from app.models.schemas import (
     DegradationStage,
     RetrievedChunk,
 )
-from app.retrieval.fuse import attach_branch_ranks, fuse_formulations
+from app.retrieval.fuse import (
+    attach_branch_ranks,
+    fuse_formulations,
+    interleave_intents,
+)
 from app.retrieval.qdrant_store import QdrantStore, ScoredPoint, get_store
 from app.retrieval.rerank import Reranker, RerankStatus, get_reranker
 
@@ -140,6 +151,23 @@ async def route_node(state: QueryState, deps: Deps) -> dict:
 # ------------------------------------------------------------------ rewrite
 
 
+def _rewrite_failure_reason(exc: BaseException) -> DegradationReason:
+    """Name what actually went wrong.
+
+    I1 is about a degraded path being *distinguishable*; a wrong label is its own
+    kind of silence. Reporting a spent daily quota as a parse error sends whoever
+    reads the degradation stream to fix the prompt, and reporting it as a timeout
+    sends them to raise the timeout — neither of which can help.
+    """
+    if isinstance(exc, LLMTimeout | asyncio.TimeoutError):
+        return DegradationReason.TIMEOUT
+    if isinstance(exc, LLMRateLimited):
+        return DegradationReason.RATE_LIMITED
+    if isinstance(exc, LLMError):
+        return DegradationReason.PARSE_ERROR
+    return DegradationReason.UNAVAILABLE
+
+
 async def rewrite_node(state: QueryState, deps: Deps) -> dict:
     """Resolve coreference — and fire the raw-query retrieval alongside it.
 
@@ -166,6 +194,7 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
             model=deps.settings.llm_model_rewrite,
             max_tokens=512,
             timeout=deps.settings.timeout_llm_rewrite_s,
+            list_key="queries",
         )
         return _clean_queries(result.get("queries"), raw_query, deps.settings)
 
@@ -189,10 +218,15 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
     if isinstance(rewrite_result, BaseException):
         logger.warning("rewrite failed, using raw query: %s", rewrite_result)
         queries = [raw_query]
+        # The reason has to name what actually happened. Reporting every rewrite
+        # failure as a timeout sends anyone reading the degradation stream after a
+        # malformed-JSON run to tune timeouts, which is the one change that cannot
+        # help (I1 is about a degraded path being *distinguishable*, and a wrong
+        # label is its own kind of silence).
         degradations = _degrade(
             state,
             DegradationStage.REWRITE,
-            DegradationReason.TIMEOUT,
+            _rewrite_failure_reason(rewrite_result),
             "raw query",
             str(rewrite_result)[:200],
         )
@@ -371,13 +405,31 @@ async def retrieve_node(state: QueryState, deps: Deps) -> dict:
             f"{len(failed)} sub-query retrieval(s) failed",
         )
 
-    # Already N-ary — merging raw + rewritten was only ever the N=2 case.
-    merged = fuse_formulations(
-        [raw_candidates, *result_sets],
-        k=deps.settings.rrf_k,
-        rank_base=deps.settings.rrf_rank_base,
-        limit=deps.settings.retrieve_top_k,
-    )
+    # Two different merges, because there are two different relationships between
+    # result sets and only one of them is agreement.
+    #
+    # One effective query means raw-versus-rewritten: two phrasings of a single
+    # intent, where a chunk found by both really is better evidence, which is
+    # what RRF encodes.
+    #
+    # Several effective queries means the message asked several things. Their
+    # answers are *supposed* to live in different places, so scoring by how many
+    # sub-queries found a chunk buries whatever answers only one of them — and
+    # the sub-question with the fewest supporting passages is precisely the one
+    # at risk of going unanswered.
+    if len(result_sets) > 1:
+        merged = interleave_intents(
+            result_sets,
+            limit=deps.settings.retrieve_top_k,
+            tail=raw_candidates,
+        )
+    else:
+        merged = fuse_formulations(
+            [raw_candidates, *result_sets],
+            k=deps.settings.rrf_k,
+            rank_base=deps.settings.rrf_rank_base,
+            limit=deps.settings.retrieve_top_k,
+        )
     return {
         "candidates": await _hydrate(state, deps, merged),
         "attempt": attempt,
@@ -498,7 +550,7 @@ async def generate_node(state: QueryState, deps: Deps) -> dict:
         answer = await deps.llm.complete(
             messages,
             model=deps.settings.llm_model_generate,
-            max_tokens=2048,
+            max_tokens=deps.settings.max_answer_tokens,
             timeout=deps.settings.timeout_llm_generate_s,
         )
     except LLMError as exc:

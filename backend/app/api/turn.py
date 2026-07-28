@@ -267,7 +267,7 @@ class TurnRunner:
             async for delta in self.deps.llm.stream(
                 messages,
                 model=settings.llm_model_generate,
-                max_tokens=2048,
+                max_tokens=settings.max_answer_tokens,
                 timeout=settings.timeout_llm_generate_s,
             ):
                 parts.append(delta)

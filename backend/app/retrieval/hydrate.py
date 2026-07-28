@@ -47,11 +47,16 @@ async def hydrate_candidates(
 
     chunk_ids = [c.chunk.id for c in candidates]
     result = await session.execute(
-        select(db.Chunk).where(
-            db.Chunk.id.in_(chunk_ids), db.Chunk.user_id == user_id
-        )
+        select(db.Chunk, db.Document.filename)
+        .join(db.Document, db.Document.id == db.Chunk.doc_id)
+        .where(db.Chunk.id.in_(chunk_ids), db.Chunk.user_id == user_id)
     )
-    rows = {row.id: row for row in result.scalars().all()}
+    # The filename rides along on the join rather than costing a second query.
+    # It is what lets the model attribute a passage to a document, so a citation
+    # can name its source and a "which document covers X" question is answerable.
+    fetched = result.all()
+    rows = {row[0].id: row[0] for row in fetched}
+    names = {row[0].id: row[1] for row in fetched}
 
     hydrated: list[RetrievedChunk] = []
     for candidate in candidates:
@@ -70,6 +75,7 @@ async def hydrate_candidates(
                     "chunk": candidate.chunk.model_copy(
                         update={
                             "text": row.text,
+                            "source_name": names.get(candidate.chunk.id),
                             "parent_text": row.parent_text,
                             "parent_char_start": row.parent_char_start,
                             "parent_char_end": row.parent_char_end,

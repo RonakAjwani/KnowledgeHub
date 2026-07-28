@@ -84,6 +84,16 @@ Rules about answering:
 - If the documents do not contain the answer, say so plainly. Do not guess, and
   do not pad a thin answer to look complete.
 - Be direct. Lead with the answer, then the supporting detail.
+
+Rules about sources:
+- Each block header names the file it came from, as `source: <filename>`. That
+  header is trustworthy metadata, not document content.
+- A file is present in the user's collection if any block names it as its
+  source. When asked about a named file, or which documents cover a topic, read
+  the source headers — never answer that a file is absent while a block in front
+  of you names it.
+- Refer to documents by their filename rather than by block number, since the
+  numbering is specific to this answer and means nothing to the user.
 """
 
 
@@ -106,6 +116,11 @@ def build_data_blocks(candidates: Sequence[RetrievedChunk]) -> tuple[str, list[s
         body = escape_delimiter(chunk.parent_text or chunk.text)
 
         provenance: list[str] = []
+        # Source first: it is the only thing here that identifies *which*
+        # document the passage belongs to, and questions that name a file or ask
+        # which documents cover a topic cannot be answered without it.
+        if chunk.source_name:
+            provenance.append(f"source: {escape_delimiter(chunk.source_name)}")
         if chunk.section:
             provenance.append(f"section: {chunk.section}")
         if chunk.page is not None:

@@ -64,6 +64,17 @@ class LLMTimeout(LLMError):
     pass
 
 
+class LLMRateLimited(LLMError):
+    """429 — the provider's quota or per-minute cap, not a malformed response.
+
+    Distinguished so a degradation record names the real cause. Gemini's free
+    tier is a per-*day* request cap on some models, so this is a routine
+    condition during development rather than an exotic one, and a stream of
+    degradations blaming "parse_error" or "timeout" for it sends whoever reads
+    them to change the one thing that cannot help.
+    """
+
+
 @dataclass(frozen=True)
 class TextPart:
     text: str
@@ -153,13 +164,22 @@ def _to_anthropic(
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
-def parse_json_tolerant(text: str) -> dict[str, Any]:
+def parse_json_tolerant(text: str, *, list_key: str | None = None) -> dict[str, Any]:
     """Extract a JSON object from a model response.
 
     Models wrap JSON in prose or code fences even under explicit instruction not
     to. Every caller of ``complete_json`` is on a fail-open path, so a parse
     failure means that stage degrades — being strict here converts a cosmetic
     formatting quirk into a lost rewrite or a lost route decision.
+
+    ``list_key`` names the field a **bare top-level array** should be wrapped
+    into. Asked for ``{"queries": [...]}``, models routinely answer with just
+    ``[...]`` — which is a correct reading of the request and carries exactly the
+    information wanted, but parsed to a list, failed the dict check, and left the
+    brace-scan with no ``{`` to find. Rewrite then degraded to the raw query on
+    every multi-part question, silently taking query decomposition with it. When
+    the caller knows which key a list belongs under, that is a formatting quirk
+    rather than a failure.
     """
     text = text.strip()
     if not text:
@@ -168,25 +188,35 @@ def parse_json_tolerant(text: str) -> dict[str, Any]:
     for candidate in (text, *(m.strip() for m in _FENCE_RE.findall(text))):
         try:
             parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
         except json.JSONDecodeError:
             continue
+        if isinstance(parsed, dict):
+            return parsed
+        if list_key is not None and isinstance(parsed, list):
+            return {list_key: parsed}
 
-    # Last resort: the outermost brace-balanced span.
-    start = text.find("{")
-    if start >= 0:
+    # Last resort: the outermost balanced span, for responses that bury the JSON
+    # in prose. Brackets are scanned as well as braces so a narrated bare array
+    # ("Sure:\n[...]") reaches the same wrapping path as a fenced one.
+    delimiters = [("{", "}")] + ([("[", "]")] if list_key is not None else [])
+    for opener, closer in delimiters:
+        start = text.find(opener)
+        if start < 0:
+            continue
         depth = 0
         for i, ch in enumerate(text[start:], start):
-            depth += ch == "{"
-            depth -= ch == "}"
+            depth += ch == opener
+            depth -= ch == closer
             if depth == 0:
                 try:
                     parsed = json.loads(text[start : i + 1])
-                    if isinstance(parsed, dict):
-                        return parsed
                 except json.JSONDecodeError:
                     break
+                if isinstance(parsed, dict):
+                    return parsed
+                if list_key is not None and isinstance(parsed, list):
+                    return {list_key: parsed}
+                break
 
     raise LLMError(f"could not parse JSON from response: {text[:200]!r}")
 
@@ -351,7 +381,8 @@ class LLMClient:
             raise LLMError(f"{self.provider} request failed: {exc}") from exc
 
         if response.status_code >= 400:
-            raise LLMError(
+            error = LLMRateLimited if response.status_code == 429 else LLMError
+            raise error(
                 f"{self.provider} returned {response.status_code}: {response.text[:300]}"
             )
 
@@ -368,8 +399,13 @@ class LLMClient:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         timeout: float = 30.0,
+        list_key: str | None = None,
     ) -> dict[str, Any]:
-        """``complete`` plus a tolerant parse. Raises ``LLMError`` if unparseable."""
+        """``complete`` plus a tolerant parse. Raises ``LLMError`` if unparseable.
+
+        ``list_key`` is forwarded to :func:`parse_json_tolerant` for callers whose
+        schema is a single named list.
+        """
         return parse_json_tolerant(
             await self.complete(
                 messages,
@@ -377,7 +413,8 @@ class LLMClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout=timeout,
-            )
+            ),
+            list_key=list_key,
         )
 
     async def stream(
@@ -406,7 +443,10 @@ class LLMClient:
             ) as response:
                 if response.status_code >= 400:
                     detail = (await response.aread()).decode(errors="replace")
-                    raise LLMError(
+                    error = (
+                        LLMRateLimited if response.status_code == 429 else LLMError
+                    )
+                    raise error(
                         f"{self.provider} returned {response.status_code}: {detail[:300]}"
                     )
 

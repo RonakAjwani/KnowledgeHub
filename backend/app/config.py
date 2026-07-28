@@ -139,6 +139,15 @@ class Settings(BaseSettings):
     # any of them. See "When More Documents Hurt RAG" (arXiv 2606.11350).
     max_context_chunks: int = 12
 
+    # Output budget for the answer, shared by the streaming and non-streaming
+    # generate paths — it was duplicated as a literal in both, which is how they
+    # drift. Set well above the length of a normal answer because current Gemini
+    # models spend part of this budget on internal reasoning before emitting any
+    # text: a multi-part question that needs three short sections can otherwise
+    # stop mid-sentence, and a truncated answer looks like a content failure
+    # rather than a token limit.
+    max_answer_tokens: int = 4096
+
     # Skip the reranker when fusion is already decisive. Cross-branch agreement
     # is the real signal: when dense and sparse independently rank the same chunk
     # first, a cross-encoder is unlikely to overturn it, so the call buys nothing

@@ -94,6 +94,66 @@ def fuse_formulations(
     return merged[:limit]
 
 
+def interleave_intents(
+    result_sets: Sequence[Sequence[RetrievedChunk]],
+    *,
+    limit: int,
+    tail: Sequence[RetrievedChunk] = (),
+) -> list[RetrievedChunk]:
+    """Merge result sets that answer **different questions**, by allocation.
+
+    RRF is the wrong operator here, and quietly so. It rewards a chunk for
+    appearing in many result sets, which is exactly right when the sets are
+    rephrasings of one intent — agreement is evidence. When the sets are distinct
+    sub-questions, agreement means almost nothing and *disagreement is expected*:
+    the passage answering the third sub-question appears in the third result set
+    and nowhere else, so RRF scores it once against rivals scoring two and three
+    times, and it lands below the context cut.
+
+    Observed exactly that way: asked three things at once, the pipeline
+    decomposed correctly, retrieved for each, then filled all twelve context
+    slots from the two documents the first two sub-questions shared and gave the
+    third zero. The answer said the corpus contained no information about a
+    document that was sitting in it.
+
+    So each intent takes turns instead. Round-robin over the sets by rank means a
+    sub-question's best passage is only ever beaten by another sub-question's
+    best passage, and every intent reaches the model as long as the budget has
+    slots for it.
+
+    ``tail`` is appended after the interleave, deduplicated — normally the raw
+    whole-message results, which stay available without being allowed to crowd
+    out any single intent.
+
+    Scores are carried through untouched. Each was already normalised against the
+    analytic ceiling by its own search; rescoring the union here would renormalise
+    across queries and shift every downstream threshold (I7).
+    """
+    non_empty = [rs for rs in result_sets if rs]
+    if not non_empty:
+        return list(tail[:limit])
+    if len(non_empty) == 1:
+        merged = list(non_empty[0])
+    else:
+        merged = []
+        seen: set[str] = set()
+        for rank in range(max(len(rs) for rs in non_empty)):
+            for result_set in non_empty:
+                if rank >= len(result_set):
+                    continue
+                candidate = result_set[rank]
+                if candidate.chunk.id in seen:
+                    continue
+                seen.add(candidate.chunk.id)
+                merged.append(candidate)
+            if len(merged) >= limit:
+                break
+
+    present = {c.chunk.id for c in merged}
+    merged.extend(c for c in tail if c.chunk.id not in present)
+    return merged[:limit]
+
+
 def _rank_signal(candidate: RetrievedChunk) -> int:
     """How much branch information this occurrence carries (0, 1 or 2)."""
     return (candidate.dense_rank is not None) + (candidate.sparse_rank is not None)

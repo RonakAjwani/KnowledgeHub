@@ -254,6 +254,32 @@ def test_unparseable_json_raises() -> None:
         parse_json_tolerant("no json here at all")
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '["a", "b"]',
+        '```json\n["a", "b"]\n```',
+        'Sure:\n["a", "b"]',
+    ],
+)
+def test_a_bare_array_is_wrapped_when_the_caller_names_its_key(raw: str) -> None:
+    """Asked for ``{"queries": [...]}``, models routinely answer ``[...]``.
+
+    That is a correct reading of the request carrying exactly the information
+    wanted, but it parsed to a list, failed the dict check, and left the
+    brace-scan with no ``{`` to find — so rewrite degraded to the raw query on
+    every multi-part question and took query decomposition with it, silently.
+    """
+    assert parse_json_tolerant(raw, list_key="queries") == {"queries": ["a", "b"]}
+
+
+def test_a_bare_array_still_raises_when_no_key_is_named() -> None:
+    """Callers expecting an object must not silently receive a list under a
+    guessed key."""
+    with pytest.raises(LLMError):
+        parse_json_tolerant('["a", "b"]')
+
+
 # ------------------------------------------------------------------- cache
 
 
