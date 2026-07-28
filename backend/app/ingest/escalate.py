@@ -180,6 +180,27 @@ async def escalate_document(
     flagged = [a for a in assessments if a.is_complex]
     degradations: list[Degradation] = []
 
+    if flagged and not cfg.llm_model_vlm:
+        # The configured provider exposes no vision model — Groq's catalogue is
+        # text-only. Say so once, rather than posting a page image at a text
+        # endpoint and collecting an identical failure for every flagged page.
+        # Tier 1's extraction stands, which is the same outcome, minus the noise.
+        return (
+            {},
+            [
+                Degradation(
+                    stage=DegradationStage.PARSE,
+                    reason=DegradationReason.UNAVAILABLE,
+                    fallback="local text extraction only",
+                    detail=(
+                        f"{len(flagged)} page(s) needed a vision model to read, "
+                        f"but provider '{cfg.llm_provider}' has none configured."
+                    ),
+                )
+            ],
+            0,
+        )
+
     if len(flagged) > cfg.max_escalated_pages:
         skipped = flagged[cfg.max_escalated_pages :]
         flagged = flagged[: cfg.max_escalated_pages]

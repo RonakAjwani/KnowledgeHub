@@ -29,9 +29,11 @@ differences live here and nowhere else. Two families:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -62,6 +64,26 @@ class LLMError(Exception):
 
 class LLMTimeout(LLMError):
     pass
+
+
+_MAX_RATE_LIMIT_RETRIES = 1
+_DEFAULT_RATE_LIMIT_WAIT_S = 2.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """How long the provider says to wait, clamped to something sane.
+
+    Both Gemini and Groq return the advice in ``Retry-After``; Gemini also
+    repeats it in the body. Anything unparseable or absurd falls back to a short
+    fixed wait — obeying a header that says 3600 would hang the request far past
+    any caller's timeout.
+    """
+    raw = response.headers.get("retry-after", "")
+    try:
+        wait = float(raw)
+    except ValueError:
+        return _DEFAULT_RATE_LIMIT_WAIT_S
+    return min(max(wait, 0.0), 30.0)
 
 
 class LLMRateLimited(LLMError):
@@ -371,20 +393,48 @@ class LLMClient:
             if hit is not None:
                 return str(hit)
 
-        try:
-            response = await self._http().post(
-                path, json=body, headers=self._headers(), timeout=timeout
-            )
-        except httpx.TimeoutException as exc:
-            raise LLMTimeout(f"{self.provider} timed out after {timeout}s") from exc
-        except httpx.HTTPError as exc:
-            raise LLMError(f"{self.provider} request failed: {exc}") from exc
+        deadline = time.monotonic() + timeout
+        attempt = 0
+        while True:
+            try:
+                response = await self._http().post(
+                    path,
+                    json=body,
+                    headers=self._headers(),
+                    timeout=max(0.1, deadline - time.monotonic()),
+                )
+            except httpx.TimeoutException as exc:
+                raise LLMTimeout(f"{self.provider} timed out after {timeout}s") from exc
+            except httpx.HTTPError as exc:
+                raise LLMError(f"{self.provider} request failed: {exc}") from exc
 
-        if response.status_code >= 400:
-            error = LLMRateLimited if response.status_code == 429 else LLMError
-            raise error(
-                f"{self.provider} returned {response.status_code}: {response.text[:300]}"
-            )
+            if response.status_code == 429:
+                # Per-minute token and request caps are a routine condition on
+                # every free tier here, and the largest prompts trip them first —
+                # so the requests most worth completing are the ones that fail.
+                # One short wait inside the caller's own deadline recovers them
+                # without turning a transient cap into a 503. A cap whose advised
+                # wait does not fit the budget is not retried: sleeping past the
+                # deadline just fails later and more expensively.
+                wait = _retry_after_seconds(response)
+                remaining = deadline - time.monotonic()
+                if attempt < _MAX_RATE_LIMIT_RETRIES and wait < remaining:
+                    logger.warning(
+                        "%s rate limited; retrying in %.1fs", self.provider, wait
+                    )
+                    await asyncio.sleep(wait)
+                    attempt += 1
+                    continue
+                raise LLMRateLimited(
+                    f"{self.provider} returned 429: {response.text[:300]}"
+                )
+
+            if response.status_code >= 400:
+                raise LLMError(
+                    f"{self.provider} returned {response.status_code}: "
+                    f"{response.text[:300]}"
+                )
+            break
 
         text = self._extract_text(self._family, response.json())
         if cacheable:

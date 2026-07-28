@@ -30,6 +30,7 @@ from app.config import Settings, get_settings
 from app.graph import prompts
 from app.graph.state import Grade, QueryState, Route
 from app.ingest.embed import Embedder, get_embedder
+from app.ingest.tokens import count_tokens
 from app.llm.client import (
     LLMClient,
     LLMError,
@@ -574,8 +575,45 @@ def context_budget(state: QueryState, settings: Settings | None = None) -> int:
     return min(cfg.rerank_top_n * sub_queries, cfg.max_context_chunks)
 
 
+def fit_context(
+    candidates: list[RetrievedChunk], settings: Settings | None = None
+) -> tuple[list[RetrievedChunk], int]:
+    """Trim the context to a token budget, highest-ranked first.
+
+    The chunk *count* cap is about model attention; this one is about the
+    request actually being accepted. Twelve parents at up to ``parent_tokens``
+    each is ~13k tokens, and Groq's free tier rejects anything over 12k with a
+    413 — not a 429, so no retry recovers it. Measured: 12,882 requested against
+    a 12,000 limit, which failed exactly the multi-part questions that needed the
+    most context.
+
+    Counted with the deterministic heuristic rather than a tokenizer: this is a
+    budget with headroom, not an accounting exercise, and no local tokenizer
+    matches the serving model's anyway.
+
+    Returns the kept candidates and how many were dropped, so the caller can
+    record a degradation — a silently shortened context is a quality change
+    nobody can see (I1).
+    """
+    cfg = settings or get_settings()
+    budget = cfg.max_context_tokens
+    kept: list[RetrievedChunk] = []
+    used = 0
+
+    for candidate in candidates:
+        text = candidate.chunk.parent_text or candidate.chunk.text
+        cost = count_tokens(text, exact=False)
+        if kept and used + cost > budget:
+            break
+        kept.append(candidate)
+        used += cost
+
+    return kept, len(candidates) - len(kept)
+
+
 def build_generate_messages(state: QueryState) -> tuple[list[Message], list[str]]:
     candidates = state.get("candidates", [])[: context_budget(state)]
+    candidates, _ = fit_context(candidates)
     user_message, chunk_ids = prompts.build_generate_user_message(
         state.get("effective_query", state["raw_query"]),
         candidates,

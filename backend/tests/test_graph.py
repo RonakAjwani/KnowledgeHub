@@ -16,6 +16,7 @@ from app.graph.nodes import (
     Deps,
     _rewrite_failure_reason,
     applicable_floor,
+    fit_context,
     grade_node,
     relevance_score,
     retrieve_node,
@@ -625,3 +626,50 @@ def test_rewrite_degradation_names_the_real_cause(exc, expected) -> None:
     raise the timeout. Neither can help.
     """
     assert _rewrite_failure_reason(exc) is expected
+
+
+def test_context_is_trimmed_to_a_token_budget() -> None:
+    """The chunk-count cap is about attention; this one is about the request
+    being accepted at all.
+
+    Twelve parent windows is ~13k tokens, and Groq's free tier rejects anything
+    over 12k with a 413 — not a 429, so no retry recovers it. Measured at 12,882
+    requested against a 12,000 limit, failing exactly the multi-part questions
+    that needed the most context.
+    """
+    big = "word " * 2000  # ~2000 heuristic tokens apiece
+    candidates = [
+        candidate(i).model_copy(
+            update={"chunk": candidate(i).chunk.model_copy(update={"parent_text": big})}
+        )
+        for i in range(10)
+    ]
+    kept, dropped = fit_context(candidates, Settings(max_context_tokens=6000))
+
+    assert 0 < len(kept) < len(candidates)
+    assert dropped == len(candidates) - len(kept)
+
+
+def test_one_oversized_chunk_is_still_sent() -> None:
+    """Dropping everything would turn a long document into an abstention."""
+    huge = "word " * 50_000
+    one = candidate(1)
+    one = one.model_copy(
+        update={"chunk": one.chunk.model_copy(update={"parent_text": huge})}
+    )
+    kept, dropped = fit_context([one], Settings(max_context_tokens=100))
+    assert len(kept) == 1 and dropped == 0
+
+
+def test_trimming_keeps_the_highest_ranked_chunks() -> None:
+    """Rank order is the whole point of reranking; trimming from the front would
+    discard the best evidence."""
+    big = "word " * 2000
+    candidates = [
+        candidate(i).model_copy(
+            update={"chunk": candidate(i).chunk.model_copy(update={"parent_text": big})}
+        )
+        for i in range(6)
+    ]
+    kept, _ = fit_context(candidates, Settings(max_context_tokens=5000))
+    assert [c.chunk.id for c in kept] == [c.chunk.id for c in candidates[: len(kept)]]

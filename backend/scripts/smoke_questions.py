@@ -6,8 +6,9 @@ and a pass rate computed over a broken pipeline is a precise number about
 nothing. This prints the whole turn: how the query was decomposed, which
 documents came back, the full answer, and what each citation resolves to.
 
-Cheap on quota by construction: routing and rewriting run on the flash-lite
-model, so the per-day cap on the generate model is spent only on generation.
+Paced between cases, because free tiers meter tokens per minute and this is the
+only place that fires six multi-chunk questions in a row. Override with
+``SMOKE_PACE_S=0`` when the provider has headroom.
 
     PYTHONPATH=. poetry run python scripts/smoke_questions.py
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import os
 import sys
 import time
 
@@ -40,6 +42,13 @@ from app.retrieval.qdrant_store import QdrantStore
 from app.retrieval.rerank import Reranker
 
 EVAL_USER = "eval-user"
+
+# Free tiers meter tokens per *minute*, and six multi-chunk questions fired
+# back to back exhaust that budget in seconds — a throughput limit of the
+# harness, not of the product, since a person asks one thing at a time.
+# Pausing between cases keeps the diagnostic measuring the pipeline rather
+# than the rate limiter.
+PACE_S = float(os.environ.get("SMOKE_PACE_S", "20"))
 
 # Six behaviours, one question each. Chosen to cover the things that would make
 # the system worth measuring, not to sample the bank evenly.
@@ -105,7 +114,9 @@ async def main() -> int:
         )
         graph = build_graph(deps)
 
-        for label, question, follow_ups in CASES:
+        for index, (label, question, follow_ups) in enumerate(CASES):
+            if index:
+                await asyncio.sleep(PACE_S)
             print("\n" + "=" * 100)
             print(f"{label.upper()}")
             print(f"Q: {question}")
@@ -125,6 +136,9 @@ async def main() -> int:
             _report(result, names, settings, time.time() - started)
 
             for follow_up in follow_ups:
+                # A follow-up lands seconds after its parent turn, which is the
+                # tightest burst in the whole script.
+                await asyncio.sleep(PACE_S)
                 print(f"\nQ (follow-up): {follow_up}")
                 started = time.time()
                 follow_state = initial_state(

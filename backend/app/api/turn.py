@@ -252,10 +252,14 @@ class TurnRunner:
         self, state: QueryState, message_id: str
     ) -> AsyncIterator[str]:
         settings = get_settings()
-        # Same budget the prompt was built from, so citation markers and the
-        # citations list cannot disagree about which chunk is [n].
-        top = state.get("candidates", [])[: nodes.context_budget(state, settings)]
         messages, chunk_ids = nodes.build_generate_messages(state)
+        # Derived from what the prompt actually contained, rather than recomputed
+        # from the same inputs. Two independent computations agreed only for as
+        # long as nothing else trimmed the context — the token budget now can,
+        # and a citation list built from a different set than the DATA blocks
+        # would silently point [n] at the wrong chunk.
+        by_id = {c.chunk.id: c for c in state.get("candidates", [])}
+        top = [by_id[cid] for cid in chunk_ids if cid in by_id]
 
         attempt = state.get("attempt", 0)
         yield self.stream.frame(

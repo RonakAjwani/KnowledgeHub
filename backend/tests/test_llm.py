@@ -26,6 +26,7 @@ from app.llm.client import (
     ImagePart,
     LLMClient,
     LLMError,
+    LLMRateLimited,
     Message,
     TextPart,
     parse_json_tolerant,
@@ -418,7 +419,7 @@ async def test_escalation_cap_emits_a_visible_degradation(pdf_bytes: bytes) -> N
     assessments = [
         PageAssessment(page=i, reasons=["degenerate_table"]) for i in range(1, 7)
     ]
-    settings = Settings(max_escalated_pages=2, vlm_render_dpi=72)
+    settings = Settings(llm_provider="gemini", max_escalated_pages=2, vlm_render_dpi=72)
     fake = _FakeClient()
 
     recovered, degradations, attempted = await escalate_document(
@@ -439,7 +440,10 @@ async def test_unflagged_pages_are_never_escalated(pdf_bytes: bytes) -> None:
     fake = _FakeClient()
 
     recovered, degradations, attempted = await escalate_document(
-        pdf_bytes, assessments, client=fake, settings=Settings(vlm_render_dpi=72)
+        pdf_bytes,
+        assessments,
+        client=fake,
+        settings=Settings(llm_provider="gemini", vlm_render_dpi=72),
     )
 
     assert attempted == 0
@@ -455,7 +459,10 @@ async def test_a_failed_page_degrades_rather_than_failing_ingest(
     fake = _FakeClient(reply=None)
 
     recovered, degradations, _ = await escalate_document(
-        pdf_bytes, assessments, client=fake, settings=Settings(vlm_render_dpi=72)
+        pdf_bytes,
+        assessments,
+        client=fake,
+        settings=Settings(llm_provider="gemini", vlm_render_dpi=72),
     )
 
     assert recovered == {}
@@ -475,7 +482,7 @@ async def test_escalation_sends_an_image_part(pdf_bytes: bytes) -> None:
         pdf_bytes,
         [PageAssessment(page=1, reasons=["large_figure"])],
         client=Capturing(),
-        settings=Settings(vlm_render_dpi=72),
+        settings=Settings(llm_provider="gemini", vlm_render_dpi=72),
     )
 
     parts = captured[0][1].content
@@ -504,3 +511,83 @@ def test_escalated_tables_come_back_atomic() -> None:
     tables = [b for b in blocks if b.block_type is BlockType.TABLE]
     assert len(tables) == 1
     assert "| 1 | 2 |" in tables[0].text
+
+
+# ------------------------------------------------------- provider model routing
+
+
+def test_models_follow_the_selected_provider() -> None:
+    """"Swapping providers is a config change, never a code change" has to be
+    true of the model ids too.
+
+    They were hardcoded Gemini strings, so ``LLM_PROVIDER=groq`` posted
+    `gemini-3.6-flash` to Groq and failed on every call.
+    """
+    groq = Settings(llm_provider="groq")
+    assert groq.llm_model_generate == "llama-3.3-70b-versatile"
+    assert groq.llm_model_route == "llama-3.1-8b-instant"
+
+    gemini = Settings(llm_provider="gemini")
+    assert gemini.llm_model_generate == "gemini-3.6-flash"
+
+
+def test_an_explicit_model_still_wins() -> None:
+    """Pinning one role must not take over the rest."""
+    settings = Settings(llm_provider="groq", llm_model_generate="openai/gpt-oss-120b")
+    assert settings.llm_model_generate == "openai/gpt-oss-120b"
+    assert settings.llm_model_route == "llama-3.1-8b-instant"
+
+
+def test_a_text_only_provider_reports_no_vision_model() -> None:
+    """Empty is the signal Tier-2 escalation checks before rendering a page."""
+    assert Settings(llm_provider="groq").llm_model_vlm == ""
+    assert Settings(llm_provider="gemini").llm_model_vlm == "gemini-3.6-flash"
+
+
+# ------------------------------------------------------------- rate limiting
+
+
+async def test_a_429_is_retried_once_within_the_deadline() -> None:
+    """Per-minute caps are routine on every free tier here, and the largest
+    prompts trip them first — so the requests most worth completing are the ones
+    that fail. One short wait recovers them instead of raising a 503."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"retry-after": "0"}, text="slow down")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = make_client(Settings(llm_provider="groq", groq_api_key="k"), handler)
+    assert await client.complete([Message(role="user", content="hi")]) == "ok"
+    assert calls["n"] == 2
+
+
+async def test_a_persistent_429_raises_rate_limited_not_a_generic_error() -> None:
+    """The distinct type is what lets a degradation record name the real cause."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429, headers={"retry-after": "0"}, text="nope")
+
+    client = make_client(Settings(llm_provider="groq", groq_api_key="k"), handler)
+    with pytest.raises(LLMRateLimited):
+        await client.complete([Message(role="user", content="hi")])
+    assert calls["n"] == 2, "one retry, then give up"
+
+
+async def test_a_429_is_not_retried_when_the_wait_exceeds_the_budget() -> None:
+    """Sleeping past the caller's deadline just fails later and more
+    expensively."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429, headers={"retry-after": "25"}, text="wait")
+
+    client = make_client(Settings(llm_provider="groq", groq_api_key="k"), handler)
+    with pytest.raises(LLMRateLimited):
+        await client.complete([Message(role="user", content="hi")], timeout=2.0)
+    assert calls["n"] == 1, "must not sleep 25s inside a 2s budget"

@@ -22,8 +22,58 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Per-role model ids for each provider. Verified against the live APIs rather
+# than recalled — guessing ids from a training prior is exactly how this breaks.
+# The 2.0-era Gemini ids these defaults originally held are dead:
+# `gemini-2.5-flash` 404s ("model is not found") and `gemini-2.0-flash` returns
+# 429 with no usable free-tier quota.
+#
+# ``vlm`` is None where the provider exposes no vision model. Groq's catalogue on
+# this key is text-only, so Tier-2 page escalation is unavailable there and says
+# so instead of failing per page.
+MODELS_BY_PROVIDER: dict[str, dict[str, str | None]] = {
+    # Confirmed 200 on 2026-07-28; 3.6-flash also confirmed for streaming and for
+    # vision (it transcribed a rendered page image exactly), which is the whole
+    # Tier-2 escalation path. Free tier is 20 requests/day on 3.6-flash, so the
+    # mechanical roles deliberately sit on the separate flash-lite bucket.
+    "gemini": {
+        "route": "gemini-3.5-flash-lite",
+        "rewrite": "gemini-3.5-flash-lite",
+        "generate": "gemini-3.6-flash",
+        "verify": "gemini-3.5-flash-lite",
+        "vlm": "gemini-3.6-flash",
+    },
+    # Confirmed 200 on 2026-07-28. Far more headroom than Gemini's free tier and
+    # markedly faster — 70b-versatile answered in 0.19s against flash-lite's ~1s.
+    # Generation stays on llama-3.3-70b-versatile because it is *not* a
+    # reasoning model. gpt-oss-120b has more daily headroom and was tried, but it
+    # spends the output budget on internal reasoning before emitting anything
+    # and returned an empty answer at 2048 — a reasoning model behind a fixed
+    # output cap fails as silence, which is the worst possible failure here.
+    #
+    # The cost is a 100k tokens/day ceiling, separate from and invisible to the
+    # per-minute headers: six runs of a six-question diagnostic exhausted it in
+    # an afternoon. A daily cap cannot be paced around, so if generation starts
+    # failing with 429s while the minute budget looks healthy, that is what
+    # happened. Mechanical roles sit on the 8b model — small prompts, own bucket.
+    "groq": {
+        "route": "llama-3.1-8b-instant",
+        "rewrite": "llama-3.1-8b-instant",
+        "generate": "llama-3.3-70b-versatile",
+        "verify": "llama-3.1-8b-instant",
+        "vlm": None,
+    },
+    "anthropic": {
+        "route": "claude-haiku-4-5-20251001",
+        "rewrite": "claude-haiku-4-5-20251001",
+        "generate": "claude-sonnet-5",
+        "verify": "claude-haiku-4-5-20251001",
+        "vlm": "claude-sonnet-5",
+    },
+}
 
 
 class Settings(BaseSettings):
@@ -63,7 +113,13 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------- LLM
     # Swapping providers is a config change, never a code change.
-    llm_provider: Literal["gemini", "anthropic", "groq"] = "gemini"
+    #
+    # Groq by default: Gemini's free tier is 20 requests/day on the generate
+    # model, which is below what one demo conversation costs, and Groq's limits
+    # are far higher and its responses faster. Gemini stays fully wired and is
+    # the only configured provider with a vision model, so Tier-2 page
+    # escalation needs LLM_PROVIDER=gemini.
+    llm_provider: Literal["gemini", "anthropic", "groq"] = "groq"
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
     groq_api_key: str = ""
@@ -72,18 +128,20 @@ class Settings(BaseSettings):
     # roles get the fastest model; generation gets the strongest; judges run off
     # the request path and can be anything.
     #
-    # Verified against the live API 2026-07-28, because guessing model IDs from a
-    # training prior is exactly how this breaks: the 2.0-era ids these defaults
-    # originally held are effectively dead — `gemini-2.5-flash` now 404s
-    # ("model is not found"), and `gemini-2.0-flash` returns 429 with no usable
-    # free-tier quota. The ids below all returned 200, and 3.6-flash was
-    # confirmed for generation, streaming *and* vision (it transcribed a rendered
-    # page image exactly), which is the whole Tier-2 escalation path.
-    llm_model_route: str = "gemini-3.5-flash-lite"
-    llm_model_rewrite: str = "gemini-3.5-flash-lite"
-    llm_model_generate: str = "gemini-3.6-flash"
-    llm_model_verify: str = "gemini-3.5-flash-lite"
-    llm_model_vlm: str = "gemini-3.6-flash"
+    # Left empty, each resolves from MODELS_BY_PROVIDER for whichever provider is
+    # selected. That is what makes "swapping providers is a config change, never
+    # a code change" actually true: hardcoded Gemini ids meant `LLM_PROVIDER=groq`
+    # would cheerfully post `gemini-3.6-flash` to Groq and fail on every call.
+    # Setting any of these explicitly still wins, so a single role can be pinned
+    # without taking over the rest.
+    llm_model_route: str = ""
+    llm_model_rewrite: str = ""
+    llm_model_generate: str = ""
+    llm_model_verify: str = ""
+    # Empty means this provider has no vision model, and Tier-2 page escalation
+    # skips with a visible degradation rather than posting an image to a
+    # text-only endpoint (I1).
+    llm_model_vlm: str = ""
 
     cohere_api_key: str = ""
     cohere_rerank_model: str = "rerank-v3.5"
@@ -141,12 +199,32 @@ class Settings(BaseSettings):
 
     # Output budget for the answer, shared by the streaming and non-streaming
     # generate paths — it was duplicated as a literal in both, which is how they
-    # drift. Set well above the length of a normal answer because current Gemini
-    # models spend part of this budget on internal reasoning before emitting any
-    # text: a multi-part question that needs three short sections can otherwise
-    # stop mid-sentence, and a truncated answer looks like a content failure
-    # rather than a token limit.
-    max_answer_tokens: int = 4096
+    # drift.
+    #
+    # Providers meter this as *reserved* output, so it is spent against the
+    # per-minute allowance whether or not the answer uses it, and
+    # `max_context_tokens` has to be chosen against the sum. Reasoning models
+    # (Gemini 3.x, gpt-oss) also emit internal reasoning from this budget before
+    # any visible text, so a value too close to the expected answer length shows
+    # up as an answer that stops mid-sentence — which reads as a content failure
+    # rather than a token limit. Raise it, and lower the context budget to match,
+    # if answers are being cut off.
+    max_answer_tokens: int = 2048
+
+    # Ceiling on the DATA blocks, enforced separately from the chunk count. The
+    # count cap is about model attention; this one is about the request being
+    # accepted at all. Twelve parent windows at `parent_tokens` each is ~13k
+    # tokens, and Groq's free tier rejects anything over 12k TPM with a 413 —
+    # measured at 12,882 requested against a 12,000 limit, which failed precisely
+    # the multi-part questions that needed the most context.
+    #
+    # Sized against the whole request rather than the prompt alone: providers
+    # meter `max_answer_tokens` as *reserved* output, so one call costs roughly
+    # context + answer + overhead against the per-minute allowance. At 6000 that
+    # came to ~10.6k of 12k — room for barely one question a minute. 4000 brings
+    # it to ~8.5k and restores usable headroom, at little cost in evidence since
+    # the reranker puts the load-bearing passages first.
+    max_context_tokens: int = 4000
 
     # Skip the reranker when fusion is already decisive. Cross-branch agreement
     # is the real signal: when dense and sparse independently rank the same chunk
@@ -217,6 +295,22 @@ class Settings(BaseSettings):
     route_threshold: float = Field(default=0.5, description="UNRESOLVED — needs corpus")
 
     # ------------------------------------------------------------- computed
+    @model_validator(mode="after")
+    def _resolve_models_for_provider(self) -> Settings:
+        """Fill unset per-role models from the selected provider's table.
+
+        Runs after env loading, so an explicit ``LLM_MODEL_GENERATE`` still wins
+        and only the roles left blank get resolved. Without this, selecting a
+        provider left the previous provider's model ids in place and every call
+        failed on an id the endpoint had never heard of.
+        """
+        table = MODELS_BY_PROVIDER.get(self.llm_provider, {})
+        for role in ("route", "rewrite", "generate", "verify", "vlm"):
+            field = f"llm_model_{role}"
+            if not getattr(self, field):
+                object.__setattr__(self, field, table.get(role) or "")
+        return self
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def rrf_max(self) -> float:
