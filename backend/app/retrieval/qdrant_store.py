@@ -28,6 +28,7 @@ that omits it (I3).
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +45,10 @@ from app.ingest.embed import (
 from app.models.schemas import Chunk
 
 logger = logging.getLogger(__name__)
+
+# Fixed namespace for deriving point UUIDs from chunk ids. Changing it would
+# orphan every existing point rather than overwrite it, so it is a constant.
+_POINT_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
 
 @dataclass
@@ -138,14 +143,17 @@ class QdrantStore:
 
     @staticmethod
     def _point_id(chunk_id: str) -> str:
-        """Qdrant point IDs must be a UUID or an unsigned int.
+        """Qdrant point IDs must be a UUID or an unsigned int; ours are neither.
 
-        Our chunk ids are a 24-char sha256 prefix, so they are formatted as a
-        UUID here — deterministically, from the same hex — which keeps re-ingest
-        an idempotent overwrite rather than a duplicate insert.
+        ``uuid5`` maps any string to a UUID deterministically, which is what
+        keeps re-ingest an idempotent overwrite rather than a duplicate insert.
+
+        Deliberately not a slice-and-reformat of the chunk id: that works only
+        while every id happens to be hex, and the failure when one isn't is a
+        Qdrant 400 reading "not a valid point ID" from three layers down the
+        stack, with nothing pointing at the id that caused it.
         """
-        padded = (chunk_id + "0" * 32)[:32]
-        return f"{padded[:8]}-{padded[8:12]}-{padded[12:16]}-{padded[16:20]}-{padded[20:32]}"
+        return str(uuid.uuid5(_POINT_NAMESPACE, chunk_id))
 
     async def upsert_chunks(
         self, chunks: list[Chunk], embeddings: list[EmbeddedChunk]

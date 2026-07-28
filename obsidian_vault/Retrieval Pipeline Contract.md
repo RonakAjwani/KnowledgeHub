@@ -284,14 +284,17 @@ One shared `FLOOR` across both is a bug. Cohere relevance and normalised RRF are
 For weighted RRF over two branches the ceiling is fixed by the constants, not by the data:
 
 ```
-RRF_MAX = (w_dense + w_sparse) / (k + 1)     # a chunk ranked #1 in both branches
+RRF_MAX = (w_dense + w_sparse) / (k + rank_base)   # a chunk ranked #1 in both branches
 ```
+
+> ✅ **`rank_base` settled empirically 2026-07-28 — it is 0, so the denominator is `k`.**
+> Measured against Qdrant **v1.18.0**: a chunk topping both branches with `w = [1, 1]` and `k = 60` scores exactly **0.03333333 = 2/60**, not 2/61. The `+1` written below assumed Qdrant ranks from 1; it ranks from 0. Reproduce with `backend/scripts/probe_rrf_rank_base.py`, and **re-run it after any Qdrant version bump** — a silent change leaves every `FLOOR_FUSED` comparison quietly mis-scaled while looking healthy.
 
 Query-independent, so `FLOOR_FUSED` means the same thing on every query. A chunk that tops one branch and is absent from the other lands near half of `RRF_MAX` — real signal about one-sided evidence, and exactly the signal self-normalisation destroys.
 
 **`k` is ours to set.** Qdrant's `rrf` object exposes `k` alongside `weights` (verified on 1.18). **Pin it in config and pass it on every query** — never rely on the server default, which is not published. Both terms of `RRF_MAX` are then our own constants, which is the only way a derived threshold stays trustworthy across a version bump.
 
-One residual, confirmed empirically during the first tuning pass rather than assumed: the `+1` holds if Qdrant ranks from 1, and the denominator is `k` if it ranks from 0. Issue a query whose top hit is known to rank #1 in both branches and read the fused score — that yields `RRF_MAX` directly and settles the rank base at the same time.
+~~One residual, confirmed empirically during the first tuning pass rather than assumed: the `+1` holds if Qdrant ranks from 1, and the denominator is `k` if it ranks from 0.~~ **Resolved 2026-07-28 — see the callout above. Qdrant 1.18 ranks from 0; the denominator is `k`.** The method was exactly as written: issue a query whose top hit ranks #1 in both branches and read the fused score, which yields `RRF_MAX` directly and settles the rank base in one shot.
 
 **This also closes NotebookRAG's fail-open hole.** There, the gate ran *only* when rerank succeeded, so a dead reranker meant no gate at all. Here every path has a defined scale and a defined threshold, so the gate always runs — `failed` degrades the score source, never the check.
 

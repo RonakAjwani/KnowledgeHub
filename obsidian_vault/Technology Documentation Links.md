@@ -157,6 +157,17 @@ Qdrant *server* is pinned to **v1.15.1** in `docker-compose.yml` and **confirmed
    Server **1.15.1 rejects the second outright**: `Format error in JSON body: Expected some form of vector, id, or a type of query`. Caught by an end-to-end test, not by review — using `FusionQuery` instead would have looked correct, returned plausible results, and made every G2 threshold silently meaningless (I7). **`docker-compose.yml` is pinned to `v1.18.0`**, which also clears the client/server compatibility warning (client 1.18 vs server 1.15 exceeded the one-minor-version tolerance).
 10. **Deterministic chunk ids need upsert semantics on *both* stores.** Qdrant's `upsert` honours them for free; a plain SQLAlchemy `session.add` turns the same determinism into a primary-key violation on the second ingest. `app/ingest/pipeline.py` uses `sqlalchemy.dialects.postgresql.insert(...).on_conflict_do_update(...)`. Idempotency has to mean the same thing in both systems or it fails the whole ingest in one of them.
 
+### Live-key findings — 2026-07-28, Phase 3
+
+11. ✅ **RRF rank base settled: Qdrant 1.18 ranks from 0**, so `RRF_MAX = (w_dense + w_sparse) / k`. A chunk topping both branches with `w=[1,1]`, `k=60` scores exactly **0.03333333 = 2/60**, not 2/61. The contract's written `+1` assumed rank-from-1 and was wrong. `config.rrf_rank_base` now defaults to 0; reproduce or re-check with `backend/scripts/probe_rrf_rank_base.py` after any version bump. **This constant is no longer in the deliberately-unresolved list.**
+12. ⚠️ **The Gemini model IDs in config were stale training priors and effectively dead.** Verified against Ronak's live key: `gemini-2.5-flash` and `gemini-2.5-flash-lite` return **404** ("model is not found"); `gemini-2.0-flash` returns **429** with no usable free-tier quota. The key itself is fine — model listing returns 41 generateContent models. Working, confirmed 200:
+    - `gemini-3.6-flash` — generation **and** streaming **and** vision (transcribed a rendered page image exactly, which proves the whole Tier-2 escalation path)
+    - `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-flash-lite-latest` — fast roles
+    - `gemini-3.5-flash` / `gemini-flash-latest` returned 200 but no `choices` at low `max_tokens` — they are thinking models and need a larger budget.
+
+    Config now routes route/rewrite/verify → `gemini-3.5-flash-lite`, generate/VLM → `gemini-3.6-flash`. **Always list models against the live key rather than trusting a remembered ID.**
+13. ✅ **Cohere Rerank v2 works on the trial key.** `POST https://api.cohere.com/v2/rerank` with `model: rerank-v3.5` returned 200 and ranked correctly (revenue document 0.6485 vs 0.0249 / 0.0170 for irrelevant ones). Response shape is `{"results": [{"index": int, "relevance_score": float}]}` — `index` refers to the position in the `documents` array we sent, so ordering is mapped back through our own candidate list rather than trusting an echoed id.
+
 ### Open gaps in this note — 2026-07-27
 
 Flagged rather than filled, because guessing a URL is the same mistake as guessing an API. Three matter; the rest of the blanks are fine.

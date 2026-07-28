@@ -72,7 +72,7 @@ Full statements in contract §0. The ones most easily broken by reasonable-looki
 - **I2 · Unknown is not zero.** A failed judge yields `null`, never `false`.
 - **I3 · `user_id` scopes everything.** Every Postgres query and every Qdrant search carries it. There is no unscoped read path.
 - **I5 · Offsets are into `normalized_text`** — never raw bytes, never a chunk.
-- **I7 · No per-query renormalisation, ever.** Normalise against the analytic `RRF_MAX = (w_dense + w_sparse) / (k + 1)`, never the observed max of the candidate set. Pin Qdrant's `k` in config rather than inheriting the server default.
+- **I7 · No per-query renormalisation, ever.** Normalise against the analytic `RRF_MAX = (w_dense + w_sparse) / (k + rank_base)`, never the observed max of the candidate set. Pin Qdrant's `k` in config rather than inheriting the server default. **`rank_base` is 0 on Qdrant 1.18** — measured, not assumed (`backend/scripts/probe_rrf_rank_base.py`), so the denominator is `k`. Re-run that probe after any Qdrant version bump.
 
 Two structural rules with the same force:
 

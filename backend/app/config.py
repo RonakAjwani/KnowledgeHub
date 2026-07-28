@@ -71,11 +71,19 @@ class Settings(BaseSettings):
     # Per-role model routing stays a config string. Latency-critical mechanical
     # roles get the fastest model; generation gets the strongest; judges run off
     # the request path and can be anything.
-    llm_model_route: str = "gemini-2.0-flash-lite"
-    llm_model_rewrite: str = "gemini-2.0-flash-lite"
-    llm_model_generate: str = "gemini-2.0-flash"
-    llm_model_verify: str = "gemini-2.0-flash-lite"
-    llm_model_vlm: str = "gemini-2.0-flash"
+    #
+    # Verified against the live API 2026-07-28, because guessing model IDs from a
+    # training prior is exactly how this breaks: the 2.0-era ids these defaults
+    # originally held are effectively dead — `gemini-2.5-flash` now 404s
+    # ("model is not found"), and `gemini-2.0-flash` returns 429 with no usable
+    # free-tier quota. The ids below all returned 200, and 3.6-flash was
+    # confirmed for generation, streaming *and* vision (it transcribed a rendered
+    # page image exactly), which is the whole Tier-2 escalation path.
+    llm_model_route: str = "gemini-3.5-flash-lite"
+    llm_model_rewrite: str = "gemini-3.5-flash-lite"
+    llm_model_generate: str = "gemini-3.6-flash"
+    llm_model_verify: str = "gemini-3.5-flash-lite"
+    llm_model_vlm: str = "gemini-3.6-flash"
 
     cohere_api_key: str = ""
     cohere_rerank_model: str = "rerank-v3.5"
@@ -99,10 +107,15 @@ class Settings(BaseSettings):
     rrf_k: int = 60
 
     # Whether Qdrant's fusion ranks from 0 or 1 decides whether RRF_MAX's
-    # denominator is `k` or `k + 1`. Settled empirically in the first tuning pass
-    # (issue a query whose top hit ranks #1 in both branches and read the fused
-    # score back) rather than assumed — hence a config value, not a literal.
-    rrf_rank_base: Literal[0, 1] = 1
+    # denominator is `k` or `k + 1`.
+    #
+    # SETTLED EMPIRICALLY 2026-07-28 against Qdrant v1.18.0: it ranks from **0**.
+    # A chunk topping both branches with w=[1,1] and k=60 scores exactly
+    # 0.03333333 = 2/60, not 2/61. The contract's written formula assumed
+    # rank-from-1; the measurement disagrees, and the measurement wins.
+    # Re-run `scripts/probe_rrf_rank_base.py` after any Qdrant version bump —
+    # a silent change here leaves every FLOOR_FUSED comparison quietly wrong.
+    rrf_rank_base: Literal[0, 1] = 0
 
     w_dense: float = Field(default=1.0, description="UNRESOLVED — needs corpus")
     w_sparse: float = Field(default=1.0, description="UNRESOLVED — needs corpus")
@@ -160,6 +173,9 @@ class Settings(BaseSettings):
         ``(w_dense + w_sparse) / (k + rank_base)``. Because both terms are our own
         constants, the value is query-independent, which is the only reason
         ``floor_fused`` can mean the same thing on every query (I7).
+
+        ``rank_base`` is measured, not assumed — see the field's comment. On
+        Qdrant 1.18 it is 0, so the denominator is ``k``.
 
         A chunk that tops one branch and is absent from the other lands near half
         of this — real signal about one-sided evidence, and exactly the signal
