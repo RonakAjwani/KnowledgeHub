@@ -25,6 +25,7 @@ from app.ingest.parse import (
     parse_markdown,
     parse_plain_text,
 )
+from app.ingest.tokens import count_tokens
 from app.models.schemas import Block, BlockType
 
 # Token counting uses the deterministic heuristic here rather than downloading
@@ -314,3 +315,39 @@ def test_metadata_propagates_to_chunks() -> None:
 def test_empty_document_yields_no_chunks() -> None:
     _, chunks = _chunks_for([Block(text="   ")])
     assert chunks == []
+
+
+def test_parent_window_terminates_when_budget_blocks_growth() -> None:
+    """Regression: the window loop must stop on 'no progress', not on reaching a
+    section or array edge.
+
+    An earlier version alternated sides and broke only at those edges, so when a
+    neighbouring block was too large for the remaining token budget — mid-section,
+    away from both array ends — nothing moved, no break fired, and the token count
+    never changed. It spun forever. Short test documents never reached the budget,
+    so only a real 40k-character paper surfaced it.
+
+    The reproducing shape is narrow, which is why it survived the suite: the
+    child's own block must fit under the cap (or the loop is never entered at
+    all), while every neighbour must be too large to append. ~165 tokens a block
+    against a 200-token parent gives exactly that.
+    """
+    blocks = [
+        Block(text=f"Paragraph {i}. " + ("filler words here. " * 40), section="One")
+        for i in range(30)
+    ]
+    doc = build_normalized_text(blocks)
+    tight = Settings(child_tokens=40, parent_tokens=200)
+
+    first = doc.spans[0]
+    own = count_tokens(doc.text[first.start : first.end])
+    assert own < tight.parent_tokens < own * 2, (
+        "test no longer reproduces the hang: the block must fit alone but not in pairs"
+    )
+
+    chunks = chunk_document(doc, doc_id="d1", user_id="u1", settings=tight)
+
+    assert chunks
+    for chunk in chunks:
+        assert chunk.parent_char_start <= chunk.char_start
+        assert chunk.parent_char_end >= chunk.char_end

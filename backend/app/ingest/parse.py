@@ -42,6 +42,26 @@ SUPPORTED_MIMES = {
 # than born-digital, and Tier 1 has nothing useful to say about it.
 _SPARSE_TEXT_CHARS_PER_KILOPIXEL = 0.02
 
+# Word-boundary tolerance as a fraction of font size, passed to every pdfplumber
+# text call.
+#
+# Many PDFs — LaTeX output especially — encode no space glyphs at all: the space
+# between two words is a horizontal jump, not a character. pdfplumber recovers
+# word boundaries from those gaps, and its default absolute tolerance of 3pt is
+# wider than the inter-word gap in a 9–10pt body font, so whole sentences come
+# back as ``Regulatorycomplianceinindustrialmaintenance``. That is invisible
+# downstream and catastrophic: BM25 tokenises the sentence as one term, so the
+# sparse branch cannot match anything in the document, and the dense branch is
+# left recovering meaning from wordpiece debris.
+#
+# Measured over this corpus, the ratio form (which scales with font size, unlike
+# a fixed tolerance) eliminated every over-long token — 199, 98 and 181 merged
+# runs in the three papers went to zero, recovering 1121 → 2633 words in the
+# worst case — while leaving the two documents that already extracted cleanly
+# byte-for-byte identical. Short-word share moved under a percentage point, so
+# nothing is being split that should not be.
+_X_TOLERANCE_RATIO = 0.15
+
 _MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _MD_TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:-]*-{3,}[\s:|-]*\|?\s*$")
 
@@ -212,7 +232,7 @@ def _assess_page(page: pdfplumber.page.Page, tables: list, text: str) -> PageAss
         assessment.reasons.append("sparse_text")
 
     for table in tables:
-        rows = table.extract()
+        rows = table.extract(x_tolerance_ratio=_X_TOLERANCE_RATIO)
         if not rows:
             assessment.reasons.append("unreadable_table")
             continue
@@ -246,7 +266,12 @@ def _blocks_from_region(
         return []
 
     region = page.crop((0, max(top, 0), page.width, min(bottom, page.height)))
-    words = region.extract_words(extra_attrs=["size"]) or []
+    words = (
+        region.extract_words(
+            extra_attrs=["size"], x_tolerance_ratio=_X_TOLERANCE_RATIO
+        )
+        or []
+    )
     if not words:
         return []
 
@@ -347,7 +372,7 @@ def parse_pdf(data: bytes) -> ParseResult:
             except Exception:  # noqa: BLE001 — a page whose ruling lines confuse
                 tables = []  # the detector still has readable prose
 
-            page_text = page.extract_text() or ""
+            page_text = page.extract_text(x_tolerance_ratio=_X_TOLERANCE_RATIO) or ""
             assessments.append(_assess_page(page, tables, page_text))
 
             # Walk the page top to bottom, carving prose out of the gaps between
@@ -361,7 +386,7 @@ def parse_pdf(data: bytes) -> ParseResult:
                     _blocks_from_region(page, cursor, top, stack, body_size)
                 )
 
-                rows = table.extract() or []
+                rows = table.extract(x_tolerance_ratio=_X_TOLERANCE_RATIO) or []
                 markdown = _table_to_markdown(rows)
                 if markdown:
                     tables_found += 1

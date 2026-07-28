@@ -143,11 +143,39 @@ class Settings(BaseSettings):
     # is the real signal: when dense and sparse independently rank the same chunk
     # first, a cross-encoder is unlikely to overturn it, so the call buys nothing
     # against a 1,000-call monthly trial.
-    decisive_ratio: float = Field(default=1.5, description="UNRESOLVED — needs corpus")
+    #
+    # MEASURED 2026-07-28 (`scripts/probe_decisive_margin.py`, 53 questions over
+    # the eval corpus). The placeholder 1.5 was borrowed from a scale that does
+    # not exist here. RRF scores are `w/(k + rank)`, so a chunk ranked 0 in both
+    # branches scores 2/60 = 0.03333 against a runner-up ranked 1 in both at
+    # 2/61 = 0.03279 — a ratio of 1.017. The largest margin observed anywhere in
+    # the corpus was 1.3033, so 1.5 sat above the metric's reachable ceiling and
+    # fired zero times in 53 queries: every single query paid a Cohere call.
+    # At 1.02, 24/53 queries skip (45% of the budget) while still requiring
+    # top-3 agreement in both branches.
+    decisive_ratio: float = 1.02
 
     # Two score sources, therefore two thresholds. Cohere relevance and normalised
     # RRF are different distributions; one shared floor across both is a bug.
-    floor_rerank: float = Field(default=0.35, description="UNRESOLVED — needs corpus")
+    #
+    # MEASURED 2026-07-28 (`evals.run --retrieval-only`, 34 answerable + 13
+    # should-decline questions on the reranked path). The sweep is deliberately
+    # flat: every floor from 0.15 to 0.45 lands within one question of the
+    # optimum, so 0.35 is chosen as the middle of a plateau rather than a peak —
+    # a knife-edge optimum on 47 questions would be a fit to this corpus, not a
+    # threshold. Note the populations overlap heavily (answerable reaches down to
+    # 0.064, should-decline up to 0.786): the floor is a backstop, and the
+    # generator's grounding prompt is what actually refuses unanswerable
+    # questions.
+    floor_rerank: float = 0.35
+
+    # STILL UNRESOLVED, and deliberately left so. Only 6 of 53 questions reached
+    # the un-reranked path, all of them rerank *failures* rather than decisive
+    # skips, and their scores do not separate at all: answerable landed in
+    # 0.804–0.856 and the single should-decline question scored 0.852, inside
+    # that range. One sample on the wrong side of the distribution is not a
+    # calibration. Raising `decisive_ratio` above will start routing real traffic
+    # here, which is what will finally produce enough samples to set it.
     floor_fused: float = Field(default=0.35, description="UNRESOLVED — needs corpus")
 
     # ------------------------------------------------------------- chunking

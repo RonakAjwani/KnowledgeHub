@@ -129,7 +129,9 @@ class Reranker:
     ) -> None:
         self.settings = settings or get_settings()
         self._client = client
-        self._cache: dict[str, list[str]] = {}
+        # Ordering *and* scores: replaying only the order would leave a cache hit
+        # scoring against nothing, which is how the constant-score bug survived.
+        self._cache: dict[str, list[tuple[str, float]]] = {}
         self._limiter = RateLimiter(COHERE_RPM, name="cohere")
         self.breaker = CircuitBreaker("cohere")
 
@@ -198,7 +200,7 @@ class Reranker:
 
     async def _call_cohere(
         self, query: str, candidates: list[RetrievedChunk]
-    ) -> list[str]:
+    ) -> list[tuple[str, float]]:
         await self._limiter.acquire()
 
         try:
@@ -253,11 +255,14 @@ class Reranker:
         results = response.json().get("results", [])
         # Cohere returns positions into the documents array we sent, so the
         # ordering is mapped back through our own candidate list rather than
-        # trusting any id echoed by the upstream.
+        # trusting any id echoed by the upstream. The relevance score travels with
+        # it — it is the signal G2 gates on, and recomputing it from position
+        # throws away the only calibrated number in the pipeline.
         return [
-            candidates[item["index"]].chunk.id
+            (candidates[item["index"]].chunk.id, float(item["relevance_score"]))
             for item in results
             if 0 <= item.get("index", -1) < len(candidates)
+            and item.get("relevance_score") is not None
         ]
 
 
@@ -273,26 +278,34 @@ class _RerankFailure(Exception):
 
 
 def _reorder(
-    candidates: list[RetrievedChunk], order: list[str]
+    candidates: list[RetrievedChunk], order: Sequence[tuple[str, float]]
 ) -> list[RetrievedChunk]:
-    """Apply a reranked ordering, attaching scores.
+    """Apply a reranked ordering, attaching Cohere's own relevance scores.
 
-    ``rerank_score`` descends from 1.0 by position rather than echoing Cohere's
-    raw relevance, because ``top_n`` truncates the response: chunks Cohere did
-    not return have no score at all, and inventing 0.0 for them would read as
-    "judged irrelevant" instead of "not judged" (I2).
+    ``rerank_score`` is the cross-encoder's calibrated judgement, not a function
+    of position. That distinction is the whole of G2 on this path: an earlier
+    version synthesised ``1.0 - position/len(order)``, which made the score depend
+    only on *how many* results came back and not at all on whether any of them
+    were relevant. With ``top_n = 5`` the blend was therefore exactly
+    ``0.6·1.0 + 0.4·0.6 = 0.840`` on **every** query, and ``FLOOR_RERANK`` was
+    being compared against a constant — structurally incapable of firing, the
+    same failure mode I7 forbids, reached by a different route.
+
+    Cohere's scale separates cleanly enough to gate on: a measured 0.6485 for a
+    relevant document against 0.0249 and 0.0170 for irrelevant ones.
+
+    ``top_n`` truncates the response, so chunks Cohere did not return keep a
+    ``None`` score — not judged, rather than judged irrelevant (I2) — and
+    :func:`relevance_score` excludes them from the blend rather than reading them
+    as zeros.
     """
     by_id = {c.chunk.id: c for c in candidates}
     ranked: list[RetrievedChunk] = []
-    for position, chunk_id in enumerate(order):
+    for chunk_id, score in order:
         candidate = by_id.pop(chunk_id, None)
         if candidate is None:
             continue
-        ranked.append(
-            candidate.model_copy(
-                update={"rerank_score": 1.0 - (position / max(len(order), 1))}
-            )
-        )
+        ranked.append(candidate.model_copy(update={"rerank_score": score}))
     # Anything Cohere did not rank keeps its fused position and a null score.
     ranked.extend(by_id[c.chunk.id] for c in candidates if c.chunk.id in by_id)
     return ranked

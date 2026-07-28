@@ -150,9 +150,9 @@ def _parent_window(
     """The enclosing section window around a child, capped.
 
     Grows outward from the child's own block through neighbours in the same
-    section, alternating sides so context is balanced rather than all-preceding.
-    Never crosses a section boundary: text under a different heading is not
-    context, it is a different subject.
+    section, taking both sides each pass so context is balanced rather than
+    all-preceding. Never crosses a section boundary: text under a different
+    heading is not context, it is a different subject.
     """
     index = next(
         (i for i, s in enumerate(spans) if s.block_index == piece.span.block_index), None
@@ -165,33 +165,36 @@ def _parent_window(
     tokens = count_tokens(doc.text[start:end])
 
     lo = hi = index
-    grow_back = True
-    while tokens < max_tokens:
-        moved = False
-        if grow_back and lo > 0 and spans[lo - 1].section == section:
+    # Each pass tries both sides and stops the moment neither moved. The
+    # termination condition is "no progress", not a set of boundary checks —
+    # an earlier version alternated sides and broke only at section or array
+    # edges, which looped forever whenever growth was blocked by the *token
+    # budget* instead: `moved` stayed false, no break condition held, and
+    # `tokens` never changed. It only showed up on real documents, where
+    # sections are long enough to exhaust the budget mid-section.
+    while True:
+        grew = False
+
+        if lo > 0 and spans[lo - 1].section == section:
             candidate = spans[lo - 1]
             extra = count_tokens(doc.text[candidate.start : start])
             if tokens + extra <= max_tokens:
                 lo -= 1
                 start = candidate.start
                 tokens += extra
-                moved = True
-        elif not grow_back and hi < len(spans) - 1 and spans[hi + 1].section == section:
+                grew = True
+
+        if hi < len(spans) - 1 and spans[hi + 1].section == section:
             candidate = spans[hi + 1]
             extra = count_tokens(doc.text[end : candidate.end])
             if tokens + extra <= max_tokens:
                 hi += 1
                 end = candidate.end
                 tokens += extra
-                moved = True
-        grow_back = not grow_back
-        if not moved and lo == 0 and hi == len(spans) - 1:
+                grew = True
+
+        if not grew:
             break
-        if not moved and not grow_back:
-            # One full alternation with no growth on either side.
-            if lo == 0 or spans[lo - 1].section != section:
-                if hi == len(spans) - 1 or spans[hi + 1].section != section:
-                    break
 
     # The parent must always contain its child, even if the child alone exceeds
     # the cap — a parent that omits the cited span would break the scroll target.

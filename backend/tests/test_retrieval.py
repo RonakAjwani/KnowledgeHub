@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app.config import Settings
+from app.graph.nodes import relevance_score
 from app.models.schemas import (
     Chunk,
     DegradationReason,
@@ -103,10 +104,15 @@ async def test_skip_records_no_degradation() -> None:
 # --------------------------------------------------------------- happy path
 
 
-def _cohere_ok(order: list[int]) -> httpx.MockTransport:
+def _cohere_ok(scored: list[tuple[int, float]]) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            200, json={"results": [{"index": i, "relevance_score": 0.9} for i in order]}
+            200,
+            json={
+                "results": [
+                    {"index": i, "relevance_score": s} for i, s in scored
+                ]
+            },
         )
 
     return httpx.MockTransport(handler)
@@ -115,7 +121,10 @@ def _cohere_ok(order: list[int]) -> httpx.MockTransport:
 async def test_applied_rerank_reorders_and_scores() -> None:
     settings = Settings(cohere_api_key="k", decisive_ratio=99.0, rerank_top_n=3)
     reranker = Reranker(
-        settings, client=httpx.AsyncClient(transport=_cohere_ok([2, 0, 1]))
+        settings,
+        client=httpx.AsyncClient(
+            transport=_cohere_ok([(2, 0.64), (0, 0.02), (1, 0.01)])
+        ),
     )
     candidates = [candidate(0, 1.0, 0, 5), candidate(1, 0.9), candidate(2, 0.8)]
 
@@ -123,9 +132,38 @@ async def test_applied_rerank_reorders_and_scores() -> None:
 
     assert outcome.status is RerankStatus.APPLIED
     assert [c.chunk.id for c in outcome.candidates] == ["c002", "c000", "c001"]
-    assert outcome.candidates[0].rerank_score == pytest.approx(1.0)
-    assert outcome.candidates[1].rerank_score < outcome.candidates[0].rerank_score
     assert outcome.degradations == []
+    # Cohere's own judgement, verbatim.
+    assert [c.rerank_score for c in outcome.candidates] == [0.64, 0.02, 0.01]
+
+
+async def test_rerank_score_reflects_relevance_not_position() -> None:
+    """Regression: the score must depend on what Cohere thought, not on how many
+    results came back.
+
+    An earlier ``_reorder`` assigned ``1.0 - position/len(order)``, so the blend
+    G2 gates on was a fixed function of ``top_n`` — exactly 0.840 for every query
+    at ``top_n = 5``, whether the documents were relevant or not. ``FLOOR_RERANK``
+    was then a comparison against a constant and could never fire. Two result sets
+    of identical length but opposite quality must not produce the same score.
+    """
+    settings = Settings(cohere_api_key="k", decisive_ratio=99.0, rerank_top_n=3)
+    candidates = [candidate(0, 1.0, 0, 5), candidate(1, 0.9), candidate(2, 0.8)]
+
+    async def scores_for(scored: list[tuple[int, float]]) -> list[float | None]:
+        reranker = Reranker(
+            settings, client=httpx.AsyncClient(transport=_cohere_ok(scored))
+        )
+        outcome = await reranker.rerank("q", candidates)
+        return [c.rerank_score for c in outcome.candidates]
+
+    strong = await scores_for([(0, 0.95), (1, 0.80), (2, 0.71)])
+    weak = await scores_for([(0, 0.04), (1, 0.02), (2, 0.01)])
+
+    assert strong != weak, "same ordering, opposite relevance, identical scores"
+    assert relevance_score(
+        [candidate(i, 0.5) for i in range(3)], str(RerankStatus.APPLIED)
+    ) == 0.0, "unscored candidates must not be read as zeros (I2)"
 
 
 async def test_second_identical_query_is_served_from_cache() -> None:
@@ -133,7 +171,15 @@ async def test_second_identical_query_is_served_from_cache() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
-        return httpx.Response(200, json={"results": [{"index": 0}, {"index": 1}]})
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"index": 0, "relevance_score": 0.71},
+                    {"index": 1, "relevance_score": 0.12},
+                ]
+            },
+        )
 
     settings = Settings(cohere_api_key="k", decisive_ratio=99.0)
     reranker = Reranker(settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
@@ -145,6 +191,9 @@ async def test_second_identical_query_is_served_from_cache() -> None:
     assert first.status is RerankStatus.APPLIED
     assert second.status is RerankStatus.CACHED
     assert calls["n"] == 1, "1000 calls/month is the budget an eval sweep would burn"
+    # A cache hit has to carry the scores too, not just the ordering — otherwise
+    # the gate sees nothing to score and the cached path silently differs.
+    assert [c.rerank_score for c in second.candidates] == [0.71, 0.12]
 
 
 # ------------------------------------------------------------ failure modes

@@ -72,6 +72,12 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 # to build the dependency graph — so the rule is simply wrong for this framework.
 ignore = ["ASYNC109", "B008"]
 
+[tool.ruff.lint.per-file-ignores]
+# questions.py is the golden set transcribed verbatim from the question bank.
+# Reflowing the question strings to 100 columns would make them stop matching the
+# source document line for line, which is the only way to check the transcription.
+"evals/questions.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.12"
 warn_unused_ignores = true

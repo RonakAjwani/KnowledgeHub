@@ -1,0 +1,448 @@
+"""Run the golden set against the ingested corpus and report.
+
+Grading is deliberately crude on the answerable side — substring presence rather
+than a judge model. A judge would be more nuanced and would also be the thing
+under test: if the pipeline and the grader share a model and a prompt style,
+agreement between them measures consistency, not correctness. A number that
+appears or does not appear is a fact.
+
+The unanswerable side is graded on behaviour, not content: did the system
+decline? That is the measurement the relevance floors exist to serve, and it is
+the one most likely to transfer to a corpus this was not tuned on.
+
+    PYTHONPATH=. poetry run python -m evals.run              # everything
+    PYTHONPATH=. poetry run python -m evals.run --section E  # one section
+    PYTHONPATH=. poetry run python -m evals.run --ids A1,A9
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import functools
+import json
+import pathlib
+import sys
+import time
+from dataclasses import asdict, dataclass
+
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.config import Settings
+from app.graph.build import build_graph
+from app.graph.nodes import (
+    Deps,
+    _search,
+    context_budget,
+    grade_node,
+    rerank_node,
+    retrieve_node,
+)
+from app.graph.state import Grade, initial_state
+from app.ingest.embed import Embedder
+from app.llm.client import LLMClient
+from app.memory.conversation import load_memory
+from app.retrieval.hydrate import hydrate_candidates
+from app.retrieval.qdrant_store import QdrantStore
+from app.retrieval.rerank import Reranker
+from evals.questions import QUESTIONS, Expect, Question
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+EVAL_USER = "eval-user"
+RESULTS_DIR = pathlib.Path(__file__).resolve().parents[2] / "evals" / "results"
+
+# Phrases a declining answer uses. Matching on the *shape* of a refusal rather
+# than an exact sentence, because the model writes its own words and the
+# abstain node's text is only one of the ways a turn can decline.
+_DECLINE_MARKERS = (
+    "could not find",
+    "couldn't find",
+    "do not contain",
+    "does not contain",
+    "doesn't contain",
+    "don't contain",
+    "not provided",
+    "not specified",
+    "not mentioned",
+    "not disclosed",
+    "not stated",
+    "not reported",
+    "no information",
+    "not available in",
+    "cannot answer",
+    "can't answer",
+    "unable to answer",
+    "not present in",
+    "not found in",
+    "does not appear",
+    "no mention",
+)
+
+
+@dataclass
+class Outcome:
+    id: str
+    section: str
+    expect: str
+    passed: bool
+    declined: bool
+    grade: str
+    relevance: float
+    rerank_status: str
+    sub_queries: int
+    citations: int
+    docs_cited: list[str]
+    latency_s: float
+    answer: str
+    missing: list[str]
+    degradations: list[str]
+
+
+def looks_like_decline(answer: str, grade: str) -> bool:
+    if grade == str(Grade.ABSTAIN):
+        return True
+    lowered = answer.lower()
+    return any(marker in lowered for marker in _DECLINE_MARKERS)
+
+
+def grade_answer(question: Question, answer: str, grade: str) -> tuple[bool, bool, list[str]]:
+    """Returns (passed, declined, missing_substrings)."""
+    declined = looks_like_decline(answer, grade)
+
+    if question.expect is Expect.DECLINE:
+        # The whole test. A confident, specific, plausible answer here is a
+        # failure however well it reads.
+        return declined, declined, []
+
+    lowered = answer.lower()
+    missing = [s for s in question.must_include if s.lower() not in lowered]
+    # `must_include` is a disjunction: any one hit means the fact is present.
+    hit = len(missing) < len(question.must_include) if question.must_include else True
+    return (hit and not declined), declined, missing
+
+
+async def run_retrieval_only(
+    question: Question, deps: Deps, settings: Settings
+) -> Outcome:
+    """Everything up to and including the gate, with no generation call.
+
+    The floors are a property of ``grade``, which decides answer-versus-abstain
+    *before* ``generate`` ever runs — so the tuning signal costs zero LLM calls.
+    That matters practically (Gemini's free tier is 20 requests/day on the
+    generate model, far short of a 55-question sweep) and methodologically: the
+    measurement no longer moves when the generation model changes underneath it.
+
+    ``route`` and ``rewrite`` are skipped rather than mocked. Both fail open — to
+    ``retrieve`` and to the raw query respectively — so skipping them reproduces
+    their degraded path exactly rather than approximating it.
+    """
+    started = time.time()
+    state = dict(
+        initial_state(
+            user_id=EVAL_USER,
+            conversation_id=f"eval-{question.id}",
+            raw_query=question.text,
+        )
+    )
+
+    state["raw_candidates"] = await _search(state, deps, question.text)
+    state["rewritten"] = False
+
+    for node in (retrieve_node, rerank_node, grade_node):
+        state.update(await node(state, deps))
+
+    elapsed = time.time() - started
+    grade = str(state.get("grade", ""))
+    # No answer text exists, so "declined" is the gate's decision alone.
+    declined = grade == str(Grade.ABSTAIN)
+    passed = declined if question.expect is Expect.DECLINE else not declined
+
+    used = state.get("candidates", [])[: context_budget(state, settings)]
+    return Outcome(
+        id=question.id,
+        section=question.section,
+        expect=str(question.expect),
+        passed=passed,
+        declined=declined,
+        grade=grade,
+        relevance=round(state.get("relevance", 0.0), 4),
+        rerank_status=state.get("rerank_status", ""),
+        sub_queries=1,
+        citations=len(used),
+        docs_cited=sorted({c.chunk.doc_id[:8] for c in used}),
+        latency_s=round(elapsed, 1),
+        answer="",
+        missing=[],
+        degradations=[f"{d.stage}/{d.reason}" for d in state.get("degradations", [])],
+    )
+
+
+async def run_question(
+    question: Question, deps: Deps, settings: Settings, session
+) -> Outcome:
+    graph = build_graph(deps)
+    started = time.time()
+
+    state = initial_state(
+        user_id=EVAL_USER,
+        conversation_id=f"eval-{question.id}",
+        raw_query=question.text,
+    )
+    result = await graph.ainvoke(state)
+
+    # Multi-turn questions continue in the same conversation with the memory the
+    # first turn produced.
+    for follow_up in question.follow_ups:
+        memory = await load_memory(
+            session, conversation_id=f"eval-{question.id}", user_id=EVAL_USER
+        )
+        follow_state = initial_state(
+            user_id=EVAL_USER,
+            conversation_id=f"eval-{question.id}",
+            raw_query=follow_up,
+            recent_turns=[
+                {"role": "user", "content": question.text},
+                {"role": "assistant", "content": result.get("answer", "")},
+            ],
+            rolling_summary=memory.rolling_summary,
+            entity_ledger=memory.entity_ledger,
+        )
+        result = await graph.ainvoke(follow_state)
+
+    elapsed = time.time() - started
+    answer = result.get("answer", "")
+    grade = str(result.get("grade", ""))
+    passed, declined, missing = grade_answer(question, answer, grade)
+
+    used = result.get("candidates", [])[: context_budget(result, settings)]
+    return Outcome(
+        id=question.id,
+        section=question.section,
+        expect=str(question.expect),
+        passed=passed,
+        declined=declined,
+        grade=grade,
+        relevance=round(result.get("relevance", 0.0), 4),
+        rerank_status=result.get("rerank_status", ""),
+        sub_queries=len(result.get("effective_queries") or [1]),
+        citations=len(used),
+        docs_cited=sorted({c.chunk.doc_id[:8] for c in used}),
+        latency_s=round(elapsed, 1),
+        answer=answer.replace("\n", " ")[:400],
+        missing=missing,
+        degradations=[f"{d.stage}/{d.reason}" for d in result.get("degradations", [])],
+    )
+
+
+async def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--section", help="only run one section, e.g. E")
+    parser.add_argument("--ids", help="comma-separated question ids")
+    parser.add_argument("--floor-fused", type=float)
+    parser.add_argument("--floor-rerank", type=float)
+    parser.add_argument("--tag", default="run", help="label for the results file")
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="stop after the gate; no generation call, so the floors can be swept "
+        "without spending LLM quota",
+    )
+    args = parser.parse_args()
+
+    settings = Settings(
+        qdrant_collection="eval_chunks",
+        max_escalated_pages=16,
+        **{
+            k: v
+            for k, v in (
+                ("floor_fused", args.floor_fused),
+                ("floor_rerank", args.floor_rerank),
+            )
+            if v is not None
+        },
+    )
+
+    selected = QUESTIONS
+    if args.section:
+        selected = [q for q in selected if q.section == args.section.upper()]
+    if args.ids:
+        wanted = {i.strip().upper() for i in args.ids.split(",")}
+        selected = [q for q in selected if q.id.upper() in wanted]
+    if not selected:
+        print("no questions matched")
+        return 1
+
+    store = QdrantStore(settings)
+    embedder = Embedder(settings)
+    llm = LLMClient(settings)
+    reranker = Reranker(settings)
+    engine = create_async_engine(settings.database_url)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    print(
+        f"running {len(selected)} questions  "
+        f"floor_fused={settings.floor_fused} floor_rerank={settings.floor_rerank}\n"
+    )
+    print(f"{'id':<5} {'exp':<8} {'res':<5} {'grade':<8} {'rel':>6} {'rerank':<17} "
+          f"{'q':>2} {'cite':>4} {'sec':>5}  answer")
+    print("-" * 150)
+
+    outcomes: list[Outcome] = []
+    async with maker() as session:
+        deps = Deps(
+            llm=llm,
+            store=store,
+            embedder=embedder,
+            reranker=reranker,
+            settings=settings,
+            hydrate=functools.partial(hydrate_candidates, session),
+        )
+        for question in selected:
+            try:
+                outcome = (
+                    await run_retrieval_only(question, deps, settings)
+                    if args.retrieval_only
+                    else await run_question(question, deps, settings, session)
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"{question.id:<5} ERROR {type(exc).__name__}: {str(exc)[:90]}")
+                continue
+            outcomes.append(outcome)
+            mark = "PASS " if outcome.passed else "FAIL "
+            print(
+                f"{outcome.id:<5} {outcome.expect:<8} {mark:<5} {outcome.grade:<8} "
+                f"{outcome.relevance:>6.3f} {outcome.rerank_status:<17} "
+                f"{outcome.sub_queries:>2} {outcome.citations:>4} {outcome.latency_s:>5.1f}  "
+                f"{outcome.answer[:70]}"
+            )
+
+    await llm.aclose()
+    await reranker.aclose()
+    await store.aclose()
+    await engine.dispose()
+
+    _summarise(outcomes)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RESULTS_DIR / f"{args.tag}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "floor_fused": settings.floor_fused,
+                "floor_rerank": settings.floor_rerank,
+                "outcomes": [asdict(o) for o in outcomes],
+            },
+            indent=2,
+        )
+    )
+    print(f"\nwrote {path}")
+    return 0
+
+
+def _floor_sweep(outcomes: list[Outcome]) -> None:
+    """What each candidate floor would do, per score source.
+
+    Relevance is already recorded, so re-thresholding it is free — the whole
+    sweep is one pass over numbers rather than N eval runs. Reranked and
+    un-reranked candidates are swept separately because they are different
+    distributions on different scales; averaging them is the bug
+    ``applicable_floor`` exists to prevent.
+
+    ``kept`` is answerable questions the floor lets through, ``gated`` is
+    should-decline questions it stops. Both rise and fall together, so the number
+    to look for is a floor sitting in a *wide* gap between the two populations,
+    not the one that maximises the sum — a knife-edge optimum on 55 questions is
+    a fit to this corpus, not a threshold.
+    """
+    for source, label in (
+        (("applied", "cached"), "FLOOR_RERANK  (Cohere relevance)"),
+        (("skipped_decisive", "failed"), "FLOOR_FUSED   (normalised RRF)"),
+    ):
+        group = [o for o in outcomes if o.rerank_status in source]
+        answerable = [o for o in group if o.expect == "answer"]
+        refusals = [o for o in group if o.expect == "decline"]
+        if not answerable and not refusals:
+            continue
+
+        print(f"\n{label}   n={len(group)}")
+        if answerable:
+            lo = min(o.relevance for o in answerable)
+            print(f"  answerable   min={lo:.3f}  " + _spread(answerable))
+        if refusals:
+            hi = max(o.relevance for o in refusals)
+            print(f"  should-decline max={hi:.3f}  " + _spread(refusals))
+        if not (answerable and refusals):
+            continue
+
+        print(f"  {'floor':>6} {'kept':>12} {'gated':>14}")
+        for floor in [x / 20 for x in range(1, 20)]:
+            kept = sum(o.relevance >= floor for o in answerable)
+            gated = sum(o.relevance < floor for o in refusals)
+            bar = "#" * round(20 * (kept + gated) / (len(answerable) + len(refusals)))
+            print(
+                f"  {floor:>6.2f} {kept:>6}/{len(answerable):<5} "
+                f"{gated:>6}/{len(refusals):<5} {bar}"
+            )
+
+
+def _spread(group: list[Outcome]) -> str:
+    values = sorted(o.relevance for o in group)
+    return (
+        f"p25={values[len(values) // 4]:.3f} "
+        f"median={values[len(values) // 2]:.3f} "
+        f"p75={values[3 * len(values) // 4]:.3f}"
+    )
+
+
+def _summarise(outcomes: list[Outcome]) -> None:
+    if not outcomes:
+        return
+    answerable = [o for o in outcomes if o.expect == "answer"]
+    refusals = [o for o in outcomes if o.expect == "decline"]
+
+    print("\n" + "=" * 60)
+    if answerable:
+        hits = sum(o.passed for o in answerable)
+        wrongly_declined = sum(o.declined for o in answerable)
+        print(f"answerable    {hits}/{len(answerable)} correct"
+              f"   ({wrongly_declined} wrongly declined)")
+    if refusals:
+        declined = sum(o.passed for o in refusals)
+        print(f"unanswerable  {declined}/{len(refusals)} correctly declined"
+              f"   ({len(refusals) - declined} hallucinated)")
+
+    # The two distributions the floors have to separate. If they overlap, no
+    # single threshold can do the job and the problem is upstream of tuning.
+    if answerable and refusals:
+        good = sorted(o.relevance for o in answerable if o.passed)
+        bad = sorted(o.relevance for o in refusals)
+        if good and bad:
+            print(f"\nrelevance on correct answers   min={good[0]:.3f} "
+                  f"median={good[len(good) // 2]:.3f} max={good[-1]:.3f}")
+            print(f"relevance on should-decline    min={bad[0]:.3f} "
+                  f"median={bad[len(bad) // 2]:.3f} max={bad[-1]:.3f}")
+
+    _floor_sweep(outcomes)
+
+    by_section: dict[str, list[Outcome]] = {}
+    for outcome in outcomes:
+        by_section.setdefault(outcome.section, []).append(outcome)
+    print("\nby section:")
+    for section in sorted(by_section):
+        group = by_section[section]
+        print(f"  {section}  {sum(o.passed for o in group)}/{len(group)}")
+
+    failures = [o for o in outcomes if not o.passed]
+    if failures:
+        print(f"\nfailures ({len(failures)}):")
+        for outcome in failures:
+            reason = (
+                "answered instead of declining"
+                if outcome.expect == "decline"
+                else (f"missing {outcome.missing}" if outcome.missing else "declined")
+            )
+            print(f"  {outcome.id:<5} {reason}")
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))
