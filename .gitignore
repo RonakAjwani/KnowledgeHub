@@ -41,3 +41,7 @@ evals/results/
 Thumbs.db
 .idea/
 .vscode/
+
+# Next.js build output
+frontend/.next/
+frontend/out/
