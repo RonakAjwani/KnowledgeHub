@@ -36,7 +36,7 @@ from app.graph.nodes import Deps
 from app.graph.state import initial_state
 from app.memory.conversation import load_memory, update_memory
 from app.models.schemas import Citation
-from app.retrieval.hydrate import hydrate_candidates
+from app.retrieval.hydrate import hydrate_candidates, load_filenames
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
@@ -249,16 +249,69 @@ async def get_conversation(
     messages = result.scalars().all()
     return {
         **_serialise_conversation(conversation),
-        "messages": [await _serialise_message(session, m) for m in messages],
+        "messages": [await _serialise_message(session, user_id, m) for m in messages],
     }
 
 
-async def _serialise_message(session: AsyncSession, message: db.Message) -> dict:
+async def _serialise_message(
+    session: AsyncSession, user_id: str, message: db.Message
+) -> dict:
+    """Citations here carry the same span and filename info a live turn's
+    `answer.complete` does — not just the evaluation-dataset columns.
+
+    A reloaded conversation is how the frontend resumes a chat, and its
+    citation chips have to resolve to a source span exactly like a fresh
+    answer's do. `message_citations` alone cannot do that: it is the retrieval
+    trace (rank, fused/rerank score, verified) and was never meant to duplicate
+    the chunk mirror's own columns, so `char_start`/`char_end`/`section`/`page`
+    and the filename are joined in from `chunks` and `documents` here.
+    """
     rows = await session.execute(
         select(db.MessageCitation)
         .where(db.MessageCitation.message_id == message.id)
         .order_by(db.MessageCitation.marker)
     )
+    citation_rows = rows.scalars().all()
+
+    chunk_ids = {row.chunk_id for row in citation_rows}
+    chunks: dict[str, db.Chunk] = {}
+    if chunk_ids:
+        chunk_result = await session.execute(
+            select(db.Chunk).where(db.Chunk.id.in_(chunk_ids))
+        )
+        chunks = {c.id: c for c in chunk_result.scalars().all()}
+
+    filenames = await load_filenames(
+        session, user_id, [row.doc_id for row in citation_rows]
+    )
+
+    citations = []
+    for row in citation_rows:
+        chunk = chunks.get(row.chunk_id)
+        citations.append(
+            {
+                "marker": row.marker,
+                "chunk_id": row.chunk_id,
+                "doc_id": row.doc_id,
+                "filename": filenames.get(row.doc_id, ""),
+                "section": chunk.section if chunk else None,
+                "page": chunk.page if chunk else None,
+                # A chunk can be gone (I3-scoped delete, or the recoverable half
+                # of the Qdrant-then-Postgres write ordering) while its citation
+                # row remains — the offsets fall back to 0 rather than crashing
+                # the history load. The chip still shows; it just cannot scroll
+                # anywhere useful, which is the honest outcome for a citation
+                # whose source no longer exists.
+                "char_start": chunk.char_start if chunk else 0,
+                "char_end": chunk.char_end if chunk else 0,
+                "rank": row.rank,
+                "fused_score": row.fused_score,
+                "rerank_score": row.rerank_score,
+                # NULL stays null — "not checked" is not "unsupported" (I2).
+                "verified": row.verified,
+            }
+        )
+
     return {
         "id": message.id,
         "role": message.role,
@@ -266,19 +319,7 @@ async def _serialise_message(session: AsyncSession, message: db.Message) -> dict
         "degradations": message.degradations,
         "pipeline": message.pipeline,
         "created_at": message.created_at.isoformat() if message.created_at else None,
-        "citations": [
-            {
-                "marker": row.marker,
-                "chunk_id": row.chunk_id,
-                "doc_id": row.doc_id,
-                "rank": row.rank,
-                "fused_score": row.fused_score,
-                "rerank_score": row.rerank_score,
-                # NULL stays null — "not checked" is not "unsupported" (I2).
-                "verified": row.verified,
-            }
-            for row in rows.scalars().all()
-        ],
+        "citations": citations,
     }
 
 
@@ -295,7 +336,7 @@ async def get_message(
     message = await session.get(db.Message, message_id)
     if message is None or message.user_id != user_id:
         raise NotFound("No such message.")
-    return await _serialise_message(session, message)
+    return await _serialise_message(session, user_id, message)
 
 
 # -------------------------------------------------------------- preferences
