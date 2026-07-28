@@ -17,9 +17,13 @@ All backend commands run from `backend/` and go through the in-project venv at `
 # Backend
 poetry install                 # dev group included; --only main is what the image uses
 poetry run pytest -q           # full suite
-poetry run ruff check app tests
+poetry run ruff check app tests scripts
 poetry run mypy app
 poetry run uvicorn app.main:app --reload --port 8000
+
+# Diagnostics
+poetry run alembic upgrade head                        # apply migrations
+PYTHONPATH=. poetry run python scripts/probe_rrf_rank_base.py   # re-check RRF_MAX after a Qdrant bump
 
 # Full stack
 docker compose up --build      # AUTH_MODE=dev, so no Clerk account needed

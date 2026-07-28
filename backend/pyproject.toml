@@ -66,7 +66,11 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 # separate connect/read/write budgets — strictly better than wrapping the call in
 # a single outer deadline. The contract's §5 table is expressed as per-dependency
 # timeouts, so the parameter is the interface, not an implementation detail.
-ignore = ["ASYNC109"]
+#
+# B008 forbids function calls in argument defaults. `Depends(...)` and `File(...)`
+# in a default *is* the FastAPI idiom — the framework reads them off the signature
+# to build the dependency graph — so the rule is simply wrong for this framework.
+ignore = ["ASYNC109", "B008"]
 
 [tool.mypy]
 python_version = "3.12"

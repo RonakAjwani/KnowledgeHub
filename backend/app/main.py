@@ -1,8 +1,10 @@
 """FastAPI application factory.
 
-Phase 0 wires the cross-cutting concerns only — request ids, the error envelope,
-CORS, and the auth-mode safety check. Routers, the database pool and the embedding
-model arrive in later phases and are registered here as they land.
+The lifespan does three things and deliberately not a fourth: it refuses to start
+misconfigured, ensures the Qdrant collection exists, and closes the pools on the
+way out. It does **not** eagerly load the embedding model — that is ~130 MB of
+ONNX weights, and paying for it at import time would make every cold start on a
+512 MB box slower for no benefit. The first ingest or query loads it lazily.
 """
 
 from __future__ import annotations
@@ -14,9 +16,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import chat, documents
 from app.auth import assert_auth_mode_safe
 from app.config import settings
+from app.db.session import dispose_engine
 from app.errors import RequestIDMiddleware, register_exception_handlers
+from app.llm.client import close_llm_client
+from app.retrieval.qdrant_store import close_store, get_store
+from app.retrieval.rerank import close_reranker
 
 logging.basicConfig(
     level=settings.log_level,
@@ -37,7 +44,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         settings.llm_provider,
         settings.rrf_max,
     )
+
+    try:
+        await get_store().ensure_collection()
+    except Exception as exc:  # noqa: BLE001
+        # Not fatal at boot: Qdrant may still be coming up under Compose, and a
+        # failed healthcheck is more useful than a crash loop. Every search
+        # already raises a named 503 if it is genuinely unreachable.
+        logger.warning("could not ensure Qdrant collection at startup: %s", exc)
+
     yield
+
+    await close_llm_client()
+    await close_reranker()
+    await close_store()
+    await dispose_engine()
     logger.info("shutdown complete")
 
 
@@ -61,6 +82,9 @@ def create_app() -> FastAPI:
     )
 
     register_exception_handlers(app)
+
+    app.include_router(documents.router)
+    app.include_router(chat.router)
 
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, str]:
