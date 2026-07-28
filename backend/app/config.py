@@ -264,14 +264,38 @@ class Settings(BaseSettings):
     # questions.
     floor_rerank: float = 0.35
 
-    # STILL UNRESOLVED, and deliberately left so. Only 6 of 53 questions reached
-    # the un-reranked path, all of them rerank *failures* rather than decisive
-    # skips, and their scores do not separate at all: answerable landed in
-    # 0.804–0.856 and the single should-decline question scored 0.852, inside
-    # that range. One sample on the wrong side of the distribution is not a
-    # calibration. Raising `decisive_ratio` above will start routing real traffic
-    # here, which is what will finally produce enough samples to set it.
-    floor_fused: float = Field(default=0.35, description="UNRESOLVED — needs corpus")
+    # RESOLVED as a *backstop*, not as a discriminator — and the distinction is
+    # the whole point.
+    #
+    # MEASURED 2026-07-29 over all 53 eval questions
+    # (`scripts/probe_relevance_signal.py`). Four candidate signals were compared
+    # as separators between answerable and should-decline questions:
+    #
+    #   fused RRF, all 40 candidates   separation +0.85   best 79%
+    #   fused RRF, top 5               separation +0.89   best 74%
+    #   dense cosine, all 40           separation +0.60   best 81%
+    #   dense cosine, top 5            separation +0.72   best 81%
+    #
+    # In every one, the should-decline population sits *inside* the answerable
+    # range (for the shipped signal: answerable 0.662–0.876, decline
+    # 0.759–0.860). No threshold separates them: at 0.65 the gate never fires, at
+    # 0.80 it trades 7 answerable questions for 7 declines, and at 0.85 it
+    # rejects 33 of 39 answerable ones. This is not a signal-quality problem to
+    # be fixed by picking a different score — an earlier note in this file
+    # claimed dense cosine was the fix, and the measurement above disproves it.
+    #
+    # The cause is that unanswerable questions in the bank are *topically
+    # adjacent*: they ask for a figure the corpus plausibly could contain but
+    # does not. Retrieval correctly returns on-topic chunks and scores them
+    # highly. Distinguishing "right topic, missing fact" requires reading the
+    # passage, which is G3's job in `generate`, not something any scalar
+    # retrieval score can encode.
+    #
+    # So this is set below the entire observed answerable range: it fires only
+    # on genuinely degenerate retrieval, and never arbitrates a close call it
+    # provably cannot judge. Over-refusal is the worse failure here — a user
+    # cannot tell a refusal from a broken product.
+    floor_fused: float = 0.50
 
     # ------------------------------------------------------------- chunking
     child_tokens: int = Field(default=250, description="UNRESOLVED — needs corpus")

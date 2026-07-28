@@ -277,9 +277,11 @@ class QdrantStore:
     ) -> list[ScoredPoint]:
         """A single unfused branch — dense or sparse alone.
 
-        Exists for the ablation table (dense-only and BM25-only rows) and for the
-        empirical `RRF_MAX` check, which needs to know a chunk's rank *within*
-        each branch. Not used on the request path.
+        Used on the request path: `_search` issues both branches alongside the
+        fused query so `attach_branch_ranks` can record each candidate's position
+        *within* each branch, which is what the conditional-rerank skip tests for
+        (cross-branch agreement, not margin alone). Also serves the ablation
+        table's dense-only and BM25-only rows and the empirical `RRF_MAX` check.
         """
         cfg = self.settings
         top_k = limit or cfg.retrieve_top_k

@@ -186,6 +186,36 @@ body. The fix — a configured fallback model that a degraded turn switches to, 
 itself surfaced as a `degradation` event — is now how the app survives a quota exhausted
 mid-demo instead of returning a bare 503.
 
+**A relevance floor is a backstop, not a judge — and this was measured, not assumed.**
+G2 gates on `0.6·max + 0.4·mean` over the retrieval scores. The obvious next move when
+abstention underperforms is "the signal is wrong, use a better score." That was tested
+directly (`scripts/probe_relevance_signal.py`, all 53 eval questions, four candidate signals):
+
+| Signal | Separation (median gap / pooled sd) | Best achievable accuracy |
+|---|---|---|
+| fused RRF, all 40 candidates | +0.85 | 79% |
+| fused RRF, top 5 | +0.89 | 74% |
+| dense cosine, all 40 | +0.60 | 81% |
+| dense cosine, top 5 | +0.72 | 81% |
+
+In all four the should-decline population sits *inside* the answerable range, so no threshold
+separates them — at 0.65 the gate never fires, at 0.80 it trades seven answerable questions for
+seven declines, at 0.85 it rejects 33 of 39 answerable ones. The reason is structural rather
+than a tuning miss: the unanswerable questions are *topically adjacent* — they ask for a figure
+the corpus plausibly could hold but does not — so retrieval correctly returns on-topic chunks
+and correctly scores them highly. Telling "right topic, missing fact" apart requires reading
+the passage, which is exactly what the grounding prompt in `generate` does and what no scalar
+retrieval score can encode. `FLOOR_FUSED` is therefore set *below* the entire observed
+answerable range: it catches degenerate retrieval and never arbitrates a close call it
+provably cannot judge. Over-refusal is the worse failure — a user cannot tell a refusal from a
+broken product.
+
+This measurement also overturned an earlier conclusion recorded in this repo. A smaller,
+biased sample (n=25, drawn only from questions that happened to skip rerank in one run) had
+suggested RRF was structurally incapable and dense cosine was the fix. Measured uniformly
+across all 53 questions, RRF separates *better* than dense cosine and the accuracy gap is one
+question. The change that sample would have justified was not worth making.
+
 **Unknown is not zero.** A citation's `verified` field is `boolean | null`, never defaulted to
 `false`. Claim-level verification runs asynchronously, off the request path, after the answer
 has already streamed — if it fails or never completes, the citation stays in its neutral,
@@ -233,17 +263,12 @@ A few constants are placeholders rather than decisions, because they need a real
 guessing them now would be tuning dressed up as an architectural choice:
 
 - RRF branch weights (`w_dense`, `w_sparse`)
-- `FLOOR_FUSED` — the un-reranked relevance gate. Measured against the eval corpus, this one
-  turned out to be a genuinely open problem rather than an unset number: RRF's fused score
-  measures *rank*, not *similarity*, so on the un-reranked path the score for a correct answer
-  and the score for a should-decline question overlapped almost completely. The honest finding
-  is recorded rather than a threshold picked to make a demo look calibrated.
 - Child/parent chunk token sizes, the G1 route-gate threshold, and the verbatim-turn count
   before rolling summarisation kicks in.
 
-`DECISIVE_RATIO` and `FLOOR_RERANK` **are** resolved — both were set from live measurement
-against the eval corpus rather than left as placeholders (see [Design
-decisions](#design-decisions) above).
+`DECISIVE_RATIO`, `FLOOR_RERANK` and `FLOOR_FUSED` **are** resolved — all three set from live
+measurement against the eval corpus rather than left as placeholders (see
+[Design decisions](#design-decisions)).
 
 ## Testing
 
@@ -295,10 +320,12 @@ Stated plainly rather than left for a reviewer to discover:
   reasoning and by two live measurement scripts (`probe_rrf_rank_base.py`,
   `probe_decisive_margin.py`), but a side-by-side recall comparison across dense-only /
   BM25-only / RRF / RRF+rerank was not built this pass.
-- **`FLOOR_FUSED` is an open problem, not a bug** — see [What's deliberately
-  unresolved](#whats-deliberately-unresolved). The un-reranked path's relevance signal needs a
-  different score source (raw dense cosine measured as a candidate, not yet wired in) before a
-  threshold on it would mean anything.
+- **A relevance floor cannot detect "right topic, missing fact."** Measured across four
+  candidate signals (see [Design decisions](#design-decisions)); none separates answerable from
+  unanswerable questions, because the unanswerable ones are topically adjacent and retrieval
+  correctly scores them highly. The floor is therefore a backstop against degenerate retrieval,
+  and the generator's grounding prompt is the real refusal mechanism. That is a property of the
+  approach, not a bug to be tuned away.
 - **Free-tier LLM quotas are real and visible.** Groq's strongest model is metered at 100k
   tokens/day; a burst of testing can exhaust it, and the app is designed to degrade to a
   smaller model with a visible `degradation` event rather than hide the fact. If answers look
