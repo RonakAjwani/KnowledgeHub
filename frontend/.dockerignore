@@ -1,0 +1,13 @@
+# Without this, `COPY . .` in the builder stage copies the *host's*
+# node_modules (Windows-native binaries, and pnpm's own `.modules.yaml` recording
+# host-specific paths) directly on top of the Linux node_modules the `deps` stage
+# just installed correctly. pnpm's own consistency check then refuses to run —
+# `pnpm build` fails inside `runDepsStatusCheck` because the tree on disk no
+# longer matches what the lockfile and store say it should be. Excluding these
+# is what makes the two-stage COPY (deps' node_modules, then the rest of the
+# source) actually produce the Linux-correct tree it was designed to.
+node_modules
+.next
+.git
+*.log
+.env*.local

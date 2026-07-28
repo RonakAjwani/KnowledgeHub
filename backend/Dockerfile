@@ -38,13 +38,18 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY app ./app
 COPY alembic.ini ./alembic.ini
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
 # The model is downloaded on first use into a mounted volume rather than baked in,
 # so the image stays small and a model swap does not require a rebuild.
-RUN mkdir -p /app/.fastembed_cache
+RUN mkdir -p /app/.fastembed_cache && chmod +x ./docker-entrypoint.sh
 
 EXPOSE 8000
 
+# The entrypoint runs `alembic upgrade head` before exec'ing into this CMD —
+# there is no separate migration step or worker service to run it from, since
+# 750 free instance-hours on Render fits exactly one service.
+ENTRYPOINT ["./docker-entrypoint.sh"]
 # Single worker, deliberately. Two workers on 0.1 vCPU would each load their own
 # copy of the ONNX embedding model and exhaust the 512 MB ceiling on their own.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
