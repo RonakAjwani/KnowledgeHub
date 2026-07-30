@@ -30,15 +30,21 @@ import collections
 import pathlib
 import re
 import sys
+import typing
 
 import pdfplumber
 
 from app.ingest.parse import _X_TOLERANCE_RATIO, parse_pdf
-from evals.corpus import CORPUS
+from evals.corpus import CORPUS, EXCLUDED
 
 CORPUS_DIR = pathlib.Path(__file__).resolve().parents[2] / "document corpus"
 
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.,%\-/]*")
+
+
+class _Entry(typing.NamedTuple):
+    key: str
+    filename: str
 
 
 def tokens(text: str) -> collections.Counter[str]:
@@ -53,13 +59,25 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pages", help="comma-separated page numbers to detail")
     parser.add_argument("--doc", help="only this corpus key")
+    parser.add_argument(
+        "--held-out",
+        action="store_true",
+        help="also measure the documents evals.corpus EXCLUDED. They are not "
+        "tuned against, so they are the check on whether a parser change "
+        "generalises or is fitted to the corpus it was found on",
+    )
     args = parser.parse_args()
     detail = {int(p) for p in args.pages.split(",")} if args.pages else set()
 
+    targets = [(e.key, e.filename) for e in CORPUS]
+    if args.held_out:
+        targets += [(f"held-out:{name}", name) for name in sorted(EXCLUDED)]
+
     grand_page, grand_lost = 0, 0
-    for entry in CORPUS:
-        if args.doc and entry.key != args.doc:
+    for key, filename in targets:
+        if args.doc and key != args.doc:
             continue
+        entry = _Entry(key, filename)
         path = CORPUS_DIR / entry.filename
         if path.suffix != ".pdf":
             continue

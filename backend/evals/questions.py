@@ -61,6 +61,10 @@ class Question:
     note: str = ""
     # Every one of these must appear (conjunction). For multi-part questions.
     must_include_all: tuple[str, ...] = ()
+    # The expected value is *computed* from retrieved values, not quoted from
+    # the corpus. Tells probe_golden_set.py not to report its absence as a
+    # broken question — for these, absence from the source text is the point.
+    derived: bool = False
     # Follow-up turns, for the multi-turn cases.
     follow_ups: tuple[str, ...] = field(default_factory=tuple)
 
@@ -103,8 +107,9 @@ QUESTIONS: list[Question] = [
              "Comparing Mistral and OpenAI ontology variants in the LegalKG paper, "
              "how many more maintenance-specific signatures does OpenAI have than "
              "Mistral?",
-             Expect.ANSWER, ("46",), ("LegalKG",),
-             note="two cells must both be retrieved before the subtraction"),
+             Expect.ANSWER, ("46",), ("LegalKG",), derived=True,
+             note="two cells must both be retrieved before the subtraction; 46 "
+                  "appears nowhere in LegalKG, which is the point"),
 
     # ------------------------------------------------- paraphrase
     Question("K5", "paraphrase",

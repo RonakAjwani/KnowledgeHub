@@ -63,8 +63,13 @@ async def main() -> int:
         )
         documents = rows.scalars().all()
 
+    # The filename is part of what the model can see: every DATA block carries a
+    # `source: <filename>` header, and the system prompt tells the model to refer
+    # to documents by filename. A question whose answer *is* a document name is
+    # therefore answerable even though the name appears nowhere in the text, so
+    # searching normalized_text alone reports a false BROKEN.
     text_by_key = {
-        BY_FILENAME[d.filename].key: d.normalized_text
+        BY_FILENAME[d.filename].key: f"{d.filename}\n{d.normalized_text}"
         for d in documents
         if d.filename in BY_FILENAME
     }
@@ -90,17 +95,29 @@ async def main() -> int:
         absent = [n for n, where in hits.items() if not where]
         # A conjunctive question needs every part somewhere; a disjunctive one
         # needs at least one.
-        if question.must_include_all:
-            dead = absent
+        if question.derived:
+            # The answer is computed from retrieved values, so it is *expected*
+            # to be absent. Nothing here can be checked automatically.
+            dead, outside = [], []
         else:
-            dead = absent if len(absent) == len(expected) else []
-        outside = [
-            (n, where)
-            for n, where in hits.items()
-            if where and question.docs and not (set(where) & set(question.docs))
-        ]
+            if question.must_include_all:
+                dead = absent
+            else:
+                dead = absent if len(absent) == len(expected) else []
+            outside = [
+                (n, where)
+                for n, where in hits.items()
+                if where and question.docs and not (set(where) & set(question.docs))
+            ]
 
-        status = "BROKEN" if dead else ("elsewhere" if outside else "ok")
+        if question.derived:
+            status = "derived"
+        elif dead:
+            status = "BROKEN"
+        elif outside:
+            status = "elsewhere"
+        else:
+            status = "ok"
         detail = "  ".join(
             f"{n}={'/'.join(where) if where else 'ABSENT'}" for n, where in hits.items()
         )

@@ -62,13 +62,6 @@ _SPARSE_TEXT_CHARS_PER_KILOPIXEL = 0.02
 # nothing is being split that should not be.
 _X_TOLERANCE_RATIO = 0.15
 
-# Narrowest strip beside a table that can hold a column of text, in points. The
-# 360 ONE factsheet's inter-table gutters are 3–4pt and its real side columns are
-# 135–200pt, so anything in between is a margin, not content. 20pt is roughly two
-# characters at body size: too narrow to hold a word, wide enough to keep every
-# genuine column in the corpus.
-_MIN_COLUMN_WIDTH = 20.0
-
 # "Table 2", "TABLE II", "Tab. 3" at the start of a line — the author's own
 # statement that a table is present. Anchored to line start so a passing mention
 # mid-sentence ("as Table 2 shows") does not trigger the fallback detector.
@@ -303,44 +296,21 @@ def _assess_page(page: pdfplumber.page.Page, tables: list, text: str) -> PageAss
     return assessment
 
 
-def _blocks_from_region(
-    page: pdfplumber.page.Page,
-    top: float,
-    bottom: float,
+def _blocks_from_words(
+    words: list[dict],
+    page_number: int,
     stack: list[tuple[int, str]],
     body_size: float,
-    left: float = 0.0,
-    right: float | None = None,
 ) -> list[Block]:
-    """Prose blocks from a rectangular slice of a page, tracking headings.
+    """Prose blocks from a set of words already assigned to one column.
 
-    Horizontal bounds exist so a caller can read one *column* at a time. Lines
-    here are grouped by vertical position alone, so a full-width crop of a
-    multi-column page joins words that merely share a baseline — the region has
-    to be narrowed to a single column before the grouping means anything.
+    Takes words rather than a rectangle on purpose. Cropping a rectangle drops
+    any character straddling the boundary, so a column edge cutting through
+    "Macro-Economic" yields "mic" — and it needs a minimum-width constant to
+    decide which strips are worth cropping at all, which is a number read off
+    one document. Assigning each *whole* word to the column its centre falls in
+    needs neither: an empty gutter simply gets no words.
     """
-    right = page.width if right is None else right
-    if bottom - top < 2:
-        return []
-    # A gutter narrower than this holds no words, only the gap between two
-    # columns. Cropping it yields nothing and costs a pdfplumber pass per table.
-    if right - left < _MIN_COLUMN_WIDTH:
-        return []
-
-    region = page.crop(
-        (
-            max(left, 0),
-            max(top, 0),
-            min(right, page.width),
-            min(bottom, page.height),
-        )
-    )
-    words = (
-        region.extract_words(
-            extra_attrs=["size"], x_tolerance_ratio=_X_TOLERANCE_RATIO
-        )
-        or []
-    )
     if not words:
         return []
 
@@ -364,12 +334,21 @@ def _blocks_from_region(
                     text=body,
                     block_type=BlockType.PROSE,
                     section=_heading_path(stack),
-                    page=page.page_number,
+                    page=page_number,
                 )
             )
         buffer = []
 
     for _, line_words in lines:
+        # Left to right, always. Grouping tolerates a 2.5pt baseline difference
+        # so a row's label and its figures land on one line, but the enclosing
+        # sort is by (top, x0) — so figures set a fraction higher than their own
+        # label sort *ahead* of it. Measured on the 360 ONE macro table: label
+        # top=145.264, figures top=143.878, and every row came out as
+        # "14.9 28.4 19.3 35.2 26.2 Two-wheeler sales (%YoY)" — each row's
+        # figures attached to the row above. Reading order within a line is a
+        # property of x, not of a baseline that happens to jitter.
+        line_words.sort(key=lambda w: w["x0"])
         text = " ".join(w["text"] for w in line_words)
         size = max((w.get("size") or body_size) for w in line_words)
 
@@ -385,7 +364,7 @@ def _blocks_from_region(
                     text=text.strip(),
                     block_type=BlockType.PROSE,
                     section=_heading_path(stack),
-                    page=page.page_number,
+                    page=page_number,
                 )
             )
             continue
@@ -402,7 +381,7 @@ def _blocks_from_region(
                     text=text.strip(),
                     block_type=BlockType.PROSE,
                     section=_heading_path(stack),
-                    page=page.page_number,
+                    page=page_number,
                 )
             )
             continue
@@ -477,19 +456,33 @@ def parse_pdf(data: bytes) -> ParseResult:
             # and on a multi-column page that is a whole column: measured on the
             # 360 ONE factsheet it deleted the entire "Fund Details" box —
             # manager, AUM, expense ratio, benchmark — from all 20 fund pages.
+            page_words = (
+                page.extract_words(
+                    extra_attrs=["size"], x_tolerance_ratio=_X_TOLERANCE_RATIO
+                )
+                or []
+            )
+            n = page.page_number
+
+            def band(lo: float, hi: float, words: list[dict] = page_words) -> list[dict]:
+                return [w for w in words if lo <= (w["top"] + w["bottom"]) / 2 < hi]
+
+            def column(words: list[dict], lo: float, hi: float) -> list[dict]:
+                return [w for w in words if lo <= (w["x0"] + w["x1"]) / 2 < hi]
+
             cursor = 0.0
             for band_tables, band_top, band_bottom in _table_bands(tables):
                 blocks.extend(
-                    _blocks_from_region(page, cursor, band_top, stack, body_size)
+                    _blocks_from_words(band(cursor, band_top), n, stack, body_size)
                 )
 
+                beside = band(band_top, band_bottom)
                 x_cursor = 0.0
                 for table in sorted(band_tables, key=lambda t: t.bbox[0]):
                     x0, _, x1, _ = table.bbox
                     blocks.extend(
-                        _blocks_from_region(
-                            page, band_top, band_bottom, stack, body_size,
-                            left=x_cursor, right=x0,
+                        _blocks_from_words(
+                            column(beside, x_cursor, x0), n, stack, body_size
                         )
                     )
 
@@ -502,21 +495,22 @@ def parse_pdf(data: bytes) -> ParseResult:
                                 text=markdown,
                                 block_type=BlockType.TABLE,
                                 section=_heading_path(stack),
-                                page=page.page_number,
+                                page=n,
                             )
                         )
                     x_cursor = max(x_cursor, x1)
 
                 blocks.extend(
-                    _blocks_from_region(
-                        page, band_top, band_bottom, stack, body_size,
-                        left=x_cursor, right=page.width,
+                    _blocks_from_words(
+                        column(beside, x_cursor, page.width + 1), n, stack, body_size
                     )
                 )
                 cursor = band_bottom
 
             blocks.extend(
-                _blocks_from_region(page, cursor, page.height, stack, body_size)
+                _blocks_from_words(
+                    band(cursor, page.height + 1), n, stack, body_size
+                )
             )
 
         page_count = len(pdf.pages)
