@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from qdrant_client.http.exceptions import (
+    ResponseHandlingException,
+    UnexpectedResponse,
+)
 
 from app.config import Settings
 from app.graph.nodes import relevance_score
@@ -24,6 +28,7 @@ from app.retrieval.fuse import (
     fuse_formulations,
     nested_rrf_max,
 )
+from app.retrieval.qdrant_store import QdrantStore
 from app.retrieval.rerank import Reranker, RerankStatus, is_decisive
 
 
@@ -332,3 +337,57 @@ def test_rrf_max_uses_the_measured_rank_base() -> None:
     denominator is k. See scripts/probe_rrf_rank_base.py."""
     assert Settings().rrf_rank_base == 0
     assert Settings(w_dense=1.0, w_sparse=1.0, rrf_k=60).rrf_max == pytest.approx(2 / 60)
+
+
+# ------------------------------------------- transport retry on Qdrant calls
+
+
+async def test_a_transport_blip_is_retried_once_and_recovers() -> None:
+    """MEASURED against the managed cluster: DNS resolution failed on 1 of 12
+    consecutive attempts, and a single miss surfaced as a 503 on
+    DELETE /documents/{id} that succeeded immediately when repeated."""
+    store = QdrantStore(Settings(), client=object())
+    attempts = 0
+
+    async def flaky() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ResponseHandlingException(Exception("getaddrinfo failed"))
+        return "recovered"
+
+    assert await store._retrying("search", flaky) == "recovered"
+    assert attempts == 2
+
+
+async def test_a_dead_cluster_gives_up_rather_than_looping() -> None:
+    """A retry loop with no ceiling is an unbounded latency budget, and a
+    cluster that is genuinely down must surface as a named dependency failure
+    rather than a hang (the reasoning behind I6, applied here)."""
+    store = QdrantStore(Settings(), client=object())
+    attempts = 0
+
+    async def dead() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise ResponseHandlingException(Exception("down"))
+
+    with pytest.raises(ResponseHandlingException):
+        await store._retrying("search", dead)
+    assert attempts == 2, "one retry, then give up"
+
+
+async def test_an_http_error_is_not_retried() -> None:
+    """Replaying a request the server actively rejected fails twice and hides
+    the reason behind a delay."""
+    store = QdrantStore(Settings(), client=object())
+    attempts = 0
+
+    async def rejected() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise UnexpectedResponse(404, "Not Found", b"", {})
+
+    with pytest.raises(UnexpectedResponse):
+        await store._retrying("count", rejected)
+    assert attempts == 1

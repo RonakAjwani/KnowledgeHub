@@ -27,12 +27,15 @@ that omits it (I3).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from app.config import Settings, get_settings
 from app.errors import DependencyUnavailable
@@ -49,6 +52,21 @@ logger = logging.getLogger(__name__)
 # Fixed namespace for deriving point UUIDs from chunk ids. Changing it would
 # orphan every existing point rather than overwrite it, so it is a constant.
 _POINT_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+
+# One retry on a transport failure, then give up. MEASURED 2026-07-30 against
+# the managed cluster: DNS resolution failed on 1 of 12 consecutive attempts
+# from this machine, and a single miss surfaced as a 503 on
+# `DELETE /documents/{id}` that succeeded immediately when repeated. A chat turn
+# makes several Qdrant calls, so a per-call failure rate is not a per-turn one.
+#
+# One retry rather than many, for the same reason retrieval is capped at two
+# attempts (I6): an unbounded retry loop is an unbounded latency budget with a
+# plausible-sounding excuse, and a cluster that is actually down should surface
+# as a named dependency failure rather than a hang.
+_CONNECTION_RETRIES = 1
+_RETRY_BACKOFF_S = 0.5
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -86,6 +104,31 @@ class QdrantStore:
         if self._client is not None:
             await self._client.close()
             self._client = None
+
+    async def _retrying(self, what: str, call: Callable[[], Awaitable[T]]) -> T:
+        """Run a Qdrant call, retrying once on a transport-level failure.
+
+        Only transport failures are retried. ``ResponseHandlingException`` is
+        qdrant-client's wrapper for connection, DNS and read-timeout errors;
+        ``UnexpectedResponse`` — a real HTTP status the server chose to return —
+        is left alone, because replaying a request the server actively rejected
+        just fails twice and hides the reason behind a delay.
+
+        Every operation here is safe to replay: point ids are derived
+        deterministically from chunk ids, so an upsert is idempotent, deletes
+        are by filter, and searches are reads.
+        """
+        for attempt in range(_CONNECTION_RETRIES + 1):
+            try:
+                return await call()
+            except ResponseHandlingException as exc:
+                if attempt == _CONNECTION_RETRIES:
+                    raise
+                logger.warning(
+                    "qdrant %s failed at the transport (%s); retrying once", what, exc
+                )
+                await asyncio.sleep(_RETRY_BACKOFF_S)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     # ------------------------------------------------------------- lifecycle
 
@@ -173,8 +216,11 @@ class QdrantStore:
             )
             for chunk, emb in zip(chunks, embeddings, strict=True)
         ]
-        await self.client.upsert(
-            collection_name=self.collection, points=points, wait=True
+        await self._retrying(
+            "upsert",
+            lambda: self.client.upsert(
+                collection_name=self.collection, points=points, wait=True
+            ),
         )
 
     async def delete_document(self, user_id: str, doc_id: str) -> None:
@@ -184,17 +230,25 @@ class QdrantStore:
         uuids — but writing an unscoped delete makes I3 a matter of the caller
         passing the right argument rather than of the query shape.
         """
-        await self.client.delete(
-            collection_name=self.collection,
-            points_selector=models.FilterSelector(filter=_scope(user_id, [doc_id])),
-            wait=True,
+        await self._retrying(
+            "delete",
+            lambda: self.client.delete(
+                collection_name=self.collection,
+                points_selector=models.FilterSelector(
+                    filter=_scope(user_id, [doc_id])
+                ),
+                wait=True,
+            ),
         )
 
     async def count(self, user_id: str) -> int:
-        result = await self.client.count(
-            collection_name=self.collection,
-            count_filter=_scope(user_id, None),
-            exact=True,
+        result = await self._retrying(
+            "count",
+            lambda: self.client.count(
+                collection_name=self.collection,
+                count_filter=_scope(user_id, None),
+                exact=True,
+            ),
         )
         return int(result.count)
 
@@ -238,17 +292,22 @@ class QdrantStore:
         ]
 
         try:
-            response = await self.client.query_points(
-                collection_name=self.collection,
-                prefetch=prefetch,
-                # NOT FusionQuery(fusion=Fusion.RRF) — that form carries neither
-                # weights nor k. See the module docstring.
-                query=models.RrfQuery(
-                    rrf=models.Rrf(k=cfg.rrf_k, weights=[cfg.w_dense, cfg.w_sparse])
+            response = await self._retrying(
+                "search",
+                lambda: self.client.query_points(
+                    collection_name=self.collection,
+                    prefetch=prefetch,
+                    # NOT FusionQuery(fusion=Fusion.RRF) — that form carries
+                    # neither weights nor k. See the module docstring.
+                    query=models.RrfQuery(
+                        rrf=models.Rrf(
+                            k=cfg.rrf_k, weights=[cfg.w_dense, cfg.w_sparse]
+                        )
+                    ),
+                    limit=top_k,
+                    with_payload=True,
+                    timeout=int(cfg.timeout_qdrant_s),
                 ),
-                limit=top_k,
-                with_payload=True,
-                timeout=int(cfg.timeout_qdrant_s),
             )
         except Exception as exc:  # noqa: BLE001
             # Retrieval is the product; it has no fallback. 503 names the

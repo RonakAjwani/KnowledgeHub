@@ -29,6 +29,21 @@ backend/.fastembed_cache/
 # Ronak's eval corpus — supplied locally, not part of the repo
 corpus/
 
+# Eval run artefacts. The findings live in obsidian_vault/Pipeline Review Log.md;
+# the raw JSON is a per-run scratch file, and committing it would age badly the
+# moment a threshold or the corpus changes.
+evals/results/
+
+# deepeval's telemetry directory. It is created on import, holds nothing we
+# need, and reappears on every test run.
+.deepeval/
+backend/.deepeval/
+
+# Agent tooling — local developer configuration, not part of the deliverable.
+.claude/
+.agents/
+skills-lock.json
+
 # Local data volumes
 qdrant_storage/
 pgdata/
