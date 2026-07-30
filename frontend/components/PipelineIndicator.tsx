@@ -183,7 +183,7 @@ function RetrievalSummary({ record }: { record: RetrievalRecord }) {
   return (
     <div className="mt-1 space-y-1">
       <p className="text-zinc-500 dark:text-zinc-400">
-        searching {sourceCount} {sourceCount === 1 ? "source" : "sources"} -> found{" "}
+        searching {sourceCount} {sourceCount === 1 ? "source" : "sources"}, found{" "}
         {record.candidateCount}{" "}
         {record.candidateCount === 1 ? "passage" : "passages"}
       </p>

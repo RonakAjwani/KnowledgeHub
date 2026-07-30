@@ -341,11 +341,40 @@ export function WorkspaceGrid() {
 
       {showLoading && <p className="shimmer-text mt-6 text-sm">Loading...</p>}
 
-      {!showLoading && (workspacesQuery.data ?? []).length === 0 && (
-        <p className="mt-6 text-sm text-zinc-500 dark:text-zinc-400">
-          Create a workspace to upload documents and start chatting.
-        </p>
+      {/* A failed fetch is not an empty account. Without this branch the error
+          falls through to the empty state below and the page says "create a
+          workspace to get started" to someone who already has several - the
+          same class of failure I1 exists to prevent on the backend, where a
+          degraded path must never look like a healthy one. The likeliest cause
+          is an expired session, so the copy says so and offers a retry rather
+          than leaving the only route a manual refresh. */}
+      {!showLoading && workspacesQuery.isError && (
+        <div className="mt-6 space-y-2" role="alert">
+          <p className="text-sm text-zinc-700 dark:text-zinc-300">
+            Could not load your workspaces.
+          </p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Your session may have expired, or the server may be unreachable.
+            Your workspaces have not been lost.
+          </p>
+          <button
+            type="button"
+            onClick={() => workspacesQuery.refetch()}
+            disabled={workspacesQuery.isFetching}
+            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            {workspacesQuery.isFetching ? "Retrying..." : "Try again"}
+          </button>
+        </div>
       )}
+
+      {!showLoading &&
+        !workspacesQuery.isError &&
+        (workspacesQuery.data ?? []).length === 0 && (
+          <p className="mt-6 text-sm text-zinc-500 dark:text-zinc-400">
+            Create a workspace to upload documents and start chatting.
+          </p>
+        )}
 
       {!showLoading &&
         (workspacesQuery.data ?? []).length > 0 &&
