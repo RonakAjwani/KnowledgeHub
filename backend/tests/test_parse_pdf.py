@@ -354,3 +354,29 @@ def test_the_recovered_table_is_an_atomic_table_block() -> None:
     tables = [b for b in result.blocks if b.block_type is BlockType.TABLE]
     assert tables, "the aligned rows should be recovered as a table block"
     assert "Manufacturing PMI" in " ".join(b.text for b in tables)
+
+
+def test_a_pipe_in_cell_text_does_not_add_a_column() -> None:
+    """An unescaped pipe ends its cell early, so every value after it shifts one
+    column left - the same corruption a collapsed blank cell causes, arriving by
+    a different route."""
+    from app.ingest.parse import _as_table_row
+
+    anchors = [300.0, 360.0, 420.0]
+
+    def word(text: str, x1: float) -> dict:
+        return {"text": text, "x0": x1 - 20, "x1": x1}
+
+    cells, _ = _as_table_row(
+        [word("Rev|enue", 60.0), word("1.0", 300.0), word("2.0", 360.0), word("3.0", 420.0)],
+        anchors,
+    )
+    row = "| " + " | ".join(cells) + " |"
+
+    unescaped = sum(
+        1
+        for i, ch in enumerate(row)
+        if ch == "|" and (i == 0 or row[i - 1] != "\\")
+    )
+    assert unescaped == len(anchors) + 2, "one delimiter per cell boundary, no more"
+    assert "3.0" == cells[-1], "the last value must stay in the last column"

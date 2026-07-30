@@ -213,6 +213,21 @@ def parse_plain_text(text: str) -> ParseResult:
 # ------------------------------------------------------------------------ PDF
 
 
+def _cell(text: str) -> str:
+    """One markdown table cell, safe to place between pipes.
+
+    A pipe inside cell content ends the cell early, so a row containing one
+    renders with more columns than the table has and every value after it
+    shifts. That is the same corruption this module works to prevent when a
+    blank cell collapses - a figure silently attributed to the wrong column -
+    arriving by a different route. Escaped rather than stripped so the text
+    stays faithful to the document.
+    """
+    return (
+        text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip()
+    )
+
+
 def _table_to_markdown(rows: list[list[str | None]]) -> str:
     """Render an extracted table as markdown.
 
@@ -465,9 +480,11 @@ def _column_anchors(lines: list[tuple[float, list[dict]]]) -> list[float]:
     while their left edges differ by up to 24pt because the numbers have
     different widths.
 
-    A cluster has to appear on at least ``_MIN_COLUMN_ROWS`` lines. One line
-    with several numbers is a sentence containing figures; three lines whose
-    figures stop at the same x are a table.
+    Only rows carrying several numbers contribute edges, and a cluster needs
+    ``_MIN_COLUMN_MEMBERS`` of them. Two is deliberate: the sparse column holds a
+    value on only two rows, and demanding three would discard the very column
+    whose emptiness this recovers. The table-level gates in ``_aligned_table``
+    are what keep ordinary prose out.
     """
     edges = sorted(
         w["x1"]
@@ -500,10 +517,10 @@ def _as_table_row(words: list[dict], anchors: list[float]) -> tuple[list[str], i
         distances = [abs(word["x1"] - a) for a in anchors]
         best = min(range(len(anchors)), key=distances.__getitem__)
         if distances[best] <= _COLUMN_BIND_TOLERANCE:
-            cells[best + 1] = (cells[best + 1] + " " + word["text"]).strip()
+            cells[best + 1] = _cell(cells[best + 1] + " " + word["text"])
             bound += 1
         else:
-            cells[0] = (cells[0] + " " + word["text"]).strip()
+            cells[0] = _cell(cells[0] + " " + word["text"])
     return cells, bound
 
 
