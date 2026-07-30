@@ -1,3 +1,6 @@
+> **SUPERSEDED** by [[Session Handoff 2026-07-30]]. The headline below -
+> that accuracy is not verified - was true when written and is not now.
+
 # Session Handoff - 2026-07-29
 
 Written because the previous session's context ran out mid-review. Start here.
