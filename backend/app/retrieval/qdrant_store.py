@@ -351,14 +351,17 @@ class QdrantStore:
                 indices=query.sparse.indices, values=query.sparse.values
             )
         )
-        response = await self.client.query_points(
-            collection_name=self.collection,
-            query=vector,
-            using=branch,
-            query_filter=_scope(user_id, doc_ids),
-            limit=top_k,
-            with_payload=True,
-            timeout=int(cfg.timeout_qdrant_s),
+        response = await self._retrying(
+            f"branch_search:{branch}",
+            lambda: self.client.query_points(
+                collection_name=self.collection,
+                query=vector,
+                using=branch,
+                query_filter=_scope(user_id, doc_ids),
+                limit=top_k,
+                with_payload=True,
+                timeout=int(cfg.timeout_qdrant_s),
+            ),
         )
         return [
             ScoredPoint(
