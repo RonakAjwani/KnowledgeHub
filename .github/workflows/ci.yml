@@ -130,7 +130,7 @@ jobs:
         run: poetry run pytest -q
 
   frontend:
-    name: frontend - lint, typecheck, build
+    name: frontend - lint, typecheck, test, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -159,6 +159,12 @@ jobs:
 
       - name: Typecheck
         run: pnpm exec tsc --noEmit
+
+      - name: Test
+        # Vitest, jsdom. Covers the SSE frame parser, the chat-turn reducer, the
+        # REST error envelope and the citation chip's three verification states.
+        # No live services needed, so this gate is honest without any secret.
+        run: pnpm test
 
       - name: Build
         # No NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is set, which is the AUTH_MODE=dev
