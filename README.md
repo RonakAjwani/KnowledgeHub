@@ -1,62 +1,64 @@
 # KnowledgeHub
 
-A multi-document RAG assistant with chat memory: upload PDFs, text or Markdown into a
+A multi-document RAG assistant with chat memory. Upload PDFs, text or Markdown into a
 workspace, ask questions across all of them, and get answers grounded in the retrieved
-passages with citations that click through to the exact highlighted span they came from.
+passages, with citations that click through to the exact highlighted span in the source.
 
-Built as a CV assessment. The brief asked for upload, hybrid retrieval, multi-turn memory,
-citations, and a clean API - this README documents what was built against that brief and,
-more importantly, *why* it was built this way rather than the more obvious way.
+Built as a CV assessment. The brief asked for upload, retrieval, multi-turn memory,
+citations and a clean API. This README covers how to run it, what I chose and why, what
+broke along the way, and how to test it.
 
 ## Contents
 
-- [Quick start](#quick-start)
-- [Architecture](#architecture)
-- [What each requirement actually does](#what-each-requirement-actually-does)
-- [Design decisions](#design-decisions)
-- [Invariants](#invariants)
-- [What's deliberately unresolved](#whats-deliberately-unresolved)
-- [Testing](#testing)
-- [Repository layout](#repository-layout)
-- [Known limitations](#known-limitations)
+1. [Running it](#1-running-it)
+2. [Tech stack and why](#2-tech-stack-and-why)
+3. [How I worked](#3-how-i-worked)
+4. [Day by day](#4-day-by-day)
+5. [Architecture](#5-architecture)
+6. [The pipeline, layer by layer](#6-the-pipeline-layer-by-layer)
+7. [Problems I hit](#7-problems-i-hit)
+8. [Testing](#8-testing)
+9. [Known limitations](#9-known-limitations)
 
-## Quick start
+## 1. Running it
 
-### Docker Compose (recommended - no accounts required)
+### Docker Compose
+
+This is the fastest path and needs no accounts.
 
 ```bash
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
-# Fill in at least one LLM key in backend/.env - GROQ_API_KEY is the default
-# provider and has the most generous free tier. The stack runs with no key at
-# all up to the point of generation; everything upstream of that (upload,
-# parsing, chunking, embedding, hybrid retrieval) works without one.
+
+# Add one LLM key to backend/.env. GROQ_API_KEY is the default provider and has
+# the most generous free tier. Everything upstream of generation (upload, parsing,
+# chunking, embedding, hybrid retrieval) runs with no key at all.
 
 docker compose up --build
 ```
 
-- Frontend: http://localhost:3000
-- Backend: http://localhost:8000 (`/healthz`, `/docs`)
-- Runs with `AUTH_MODE=dev` by default - every request is assigned the same fixed user, so
-  there is nothing to sign in to and no Clerk account is required to see the system work.
-- Migrations run automatically on container start (`alembic upgrade head`, idempotent - see
-  `backend/docker-entrypoint.sh`). There is no separate migration step to remember.
+| | |
+|---|---|
+| Frontend | http://localhost:3000 |
+| Backend | http://localhost:8000 (`/healthz`, `/docs`) |
+| Auth | `AUTH_MODE=dev`, so every request maps to one fixed user. Nothing to sign into, no Clerk account needed. |
+| Migrations | Run automatically on container start via `backend/docker-entrypoint.sh`. No separate step. |
 
-### Manual development setup
+### Manual setup
 
-Backend (Poetry-managed, isolated at `backend/.venv`):
+Backend, isolated in `backend/.venv`:
 
 ```bash
 cd backend
 poetry config virtualenvs.in-project true   # once per machine
-poetry install                               # dev group included
-cp .env.example .env                         # fill in keys
-docker compose up -d postgres qdrant         # just the datastores
+poetry install
+cp .env.example .env
+docker compose up -d postgres qdrant        # just the datastores
 poetry run alembic upgrade head
 poetry run uvicorn app.main:app --reload --port 8000
 ```
 
-Frontend (pnpm-managed, isolated at `frontend/node_modules`):
+Frontend, isolated in `frontend/node_modules`:
 
 ```bash
 cd frontend
@@ -65,273 +67,302 @@ pnpm install
 pnpm dev
 ```
 
-Diagnostics:
+## 2. Tech stack and why
+
+| Layer | Choice | Why this one |
+|---|---|---|
+| Vector DB | Qdrant | Dense and sparse vectors live as named vectors in one collection, and it fuses them server side in a single call. Pinecone would need two queries and client side fusion. |
+| Embeddings | `bge-small-en-v1.5` via fastembed | Runs in 512 MB alongside the API. `bge-base` does not. fastembed is ONNX, so there is no torch in the image. |
+| Sparse | `Qdrant/bm25` | Keeps BM25 in the same store as the dense vectors, so one query covers both. |
+| Reranker | Cohere `rerank`, hosted | A local cross encoder is roughly 568 M params. That does not fit the memory budget next to everything else. |
+| Orchestration | LangGraph | Used for checkpointing and per node event streaming, not for autonomy. The graph is bounded and its shape is fixed. |
+| Backend | FastAPI, Python 3.12, Poetry | Async throughout, which matters when one request fans out to Qdrant, Cohere and an LLM. Poetry groups keep test tooling out of the runtime image. |
+| Database | Postgres, SQLAlchemy, Alembic | Citations need real joins across documents, chunks, messages. SQLite would work locally and then not on Render. |
+| Frontend | Next.js App Router, TypeScript, Tailwind, shadcn/ui | App Router for streaming, and shadcn because I wanted to own the component code rather than fight a component library's styling. |
+| Auth | Clerk | Free tier is generous and it drops in cleanly. It is also skippable, which matters more (see `AUTH_MODE=dev`). |
+| LLM | Provider agnostic adapter (Groq, Anthropic, Gemini) | Free tiers move and quotas get hit mid demo. Swapping provider is an env change, not a code change. |
+
+Hosting is Docker Compose first. Render's free Postgres is deleted 44 days after creation,
+so Compose is the deliverable that still works after a live link expires.
+
+## 3. How I worked
+
+The brief said it was measuring problem solving, technical skill, and the ability to build
+something complex, and that I could simplify features with a reason, adapt the workflow,
+and prioritise what I thought mattered. I took that seriously and it shaped the whole
+project.
+
+**Research with Perplexity.** Most of what this stack depends on moved after any model's
+training cutoff, so I could not trust remembered API details. I used Perplexity to pull
+current documentation and pin down facts before building on them: Qdrant's RRF query
+object and whether it exposes `k`, Cohere's trial limits and which status code means quota
+versus rate, Render's free tier rules, Groq's per day token caps. Anything I could not
+verify went into an open questions list rather than into the design.
+
+**Building with Claude Code.** I ran this across several sessions. Context does not carry
+between sessions, so I kept an Obsidian vault (`obsidian_vault/`) as the project's memory:
+decisions, the reasoning behind them, and what had already been ruled out. Before writing
+code I wrote a retrieval pipeline contract with the invariants, types and stage behaviour
+spelled out, so implementation had something to be checked against instead of being
+improvised. I also used it to write and run measurement probes, which is where most of the
+useful findings came from.
+
+**What I decided myself.** The architecture, the invariants, what to cut, and what counted
+as evidence. I made a rule early on that a number goes in the repo only if a script
+produced it, and several proposals that sounded right died against their own measurements
+(see [Problems I hit](#7-problems-i-hit)).
+
+**What I chose to prioritise.** Depth over feature count. Specifically:
+
+- Citations that resolve to exact character offsets, not footnote markers. This is the one
+  thing that could not be retrofitted, so it was built first.
+- Measuring the pipeline instead of asserting it works. The eval splits retrieval, answer,
+  refusal and citation accuracy, because a single number hides which stage is broken.
+- Treating uploaded documents as untrusted input. Most "chat with your PDF" demos skip this.
+
+**What I simplified, with reasons.**
+
+| Simplified | Why |
+|---|---|
+| No LlamaParse tier 3 parsing | Local parsing plus a vision model for hard pages already covers tables. A paid tier adds cost and an unverified free tier for a solved problem. |
+| No separate ingest worker | Render gives 750 free instance hours per workspace per month, and overrunning suspends every free service. Two services would not fit. Ingest runs as a background task in the API process. |
+| No uptime pinger | Same budget. I accept a 60 second cold start instead. |
+| Contextual Retrieval wired but off | It costs an LLM call per chunk at ingest. The toggle exists, the default is off. |
+| Rejected HyDE, GraphRAG, embedding fine tuning | HyDE showed no measurable gain on this corpus. GraphRAG solves multi hop entity networks, which this is not. Fine tuning needs a labelled corpus I do not have. |
+
+## 4. Day by day
+
+The brief estimated one to three days. I took five, because the assessment is about
+engineering quality and I would rather submit something measured than something fast.
+
+| Day | What happened |
+|---|---|
+| Mon 27 Jul | Research and architecture. Compared retrieval techniques, verified infrastructure limits, wrote the pipeline contract and the architecture diagram. Project setup. |
+| Tue 28 Jul | Built the RAG pipeline end to end: parse, chunk, embed, hybrid retrieval, the LangGraph query graph, SSE streaming. First working UI on the same day. |
+| Wed 29 Jul | Started measuring instead of assuming. Built the eval harness and the probe scripts, then fixed what the numbers exposed. Built the UI out properly. |
+| Thu 30 Jul | Parsing accuracy. Found and fixed the table column bug and the missing text beside tables, added the source viewer with PDF rendering, and ran a full review pass over every stage. |
+| Fri 31 Jul | Frontend test suite, diagrams, this README. Provider switch to Anthropic, deployment and demo video. |
+
+## 5. Architecture
+
+![Architecture](architecture-overview.svg)
+
+The two pipelines are drawn as parallel columns because that is what they are. Ingest and
+query share the stores and nothing else, and they run on different requests.
+
+Three stores, kept separate on purpose:
+
+- **Qdrant** holds chunk vectors, dense and sparse, as named vectors in one collection.
+- **Postgres** holds documents, a chunk mirror for citation resolution, conversations,
+  messages, and `message_citations` (the per citation retrieval trace).
+- **Conversation state** is a rolling summary and an entity ledger, updated after a turn
+  finishes, never during it, and never read by retrieval. User preferences sit in their own
+  table and are also kept out of the query path, so a stored tone preference cannot quietly
+  change what gets searched.
+
+## 6. The pipeline, layer by layer
+
+### Ingest: upload, parse, sanitize, chunk, embed, upsert
+
+Runs as an async background task in the API process. A 200 page PDF cannot block an HTTP
+request, and a separate worker does not fit the hosting budget.
+
+**Parse.** Tier 1 is local, `pypdf` and `pdfplumber`. Pages that a cheap local heuristic
+flags as complex escalate to a vision model through the same LLM adapter used for
+generation, rendered with `pypdfium2`. Escalation is paced on tokens, not on image count,
+because the multimodal ceiling is tokens per minute, and there is a per document cap that
+emits a visible degradation when it is hit.
+
+**Sanitize.** Uploaded documents are an untrusted input channel. Zero width characters,
+white on white text, HTML comments and PDF annotation layers are stripped. They are counted
+and reported, never used as a reason to reject the file.
+
+**Chunk.** Parent and child chunks. Each child carries its section heading path in the
+embedded text, which is what makes twenty near identical pages distinguishable at all.
+
+**Embed and upsert.** Dense and sparse vectors are written to Qdrant first, then the
+Postgres mirror. That order is on purpose: an orphaned vector can be recovered by
+re-running ingest, an orphaned citation row cannot.
+
+Chunk ids are derived from content, so re-uploading a file overwrites the same points
+instead of duplicating them. The upload itself is deduplicated by content hash, scoped per
+user and per workspace.
+
+### Query: route, rewrite, retrieve, rerank, grade, generate
+
+A LangGraph state graph over one shared state object, with `verify` off the request path
+and `history`, `refuse` and `abstain` as terminal nodes.
+
+**Route** decides whether the question needs a search at all or can be answered from
+conversation history.
+
+**Rewrite** resolves pronouns and references against the recent turns and the entity
+ledger. Retrieval on the raw query fires in parallel with this, and the second Qdrant call
+is skipped when the rewrite changed nothing, so most turns cost one round trip and not two.
+
+**Retrieve** is hybrid. Qdrant prefetches the dense and sparse branches and fuses them with
+weighted RRF in one call, with `k` pinned in config rather than inherited from the server
+default. Scores are normalised against an analytic maximum computed from `k` and the
+weights. Normalising against the observed maximum of the candidate set instead would force
+the top score to 1.0 on every query and make every downstream threshold meaningless.
+
+**Rerank** calls Cohere with a cache and a fallback chain that never fails: Cohere, then
+cache, then the fused order. A 402 (quota) trips a circuit breaker for the rest of the
+deployment; a 429 (rate) backs off. Those are different failures and the client treats them
+differently.
+
+**Grade** applies a relevance floor as a backstop. It is not the refusal mechanism, and
+that is a measured conclusion rather than a design preference (see below).
+
+**Generate** puts chunk text into delimited `[[[DOCUMENT n]]]` blocks with the delimiter
+escaped inside the chunk text, so a document cannot forge its own block boundary. Citation
+markers in the output are mapped back positionally to the chunk that occupied that prompt
+slot, so a citation cannot be hallucinated into existence.
+
+**Verify** runs after the answer has streamed. Each claim is checked against the passage it
+cites. A failed judge yields `null`, never `false`, because reporting a citation as
+unsupported when nobody actually checked it is a specific false claim.
+
+### Two rules that hold everywhere
+
+**One builder, one string.** `build_normalized_text(Block[]) -> (text, spans)` is the only
+function allowed to concatenate parsed content. Sanitisation happens inside it, before
+offsets are assigned, and the string is immutable afterwards. Every chunk offset, every
+citation and the source pane highlight all index into that exact string. A stray `.strip()`
+anywhere downstream would invalidate every offset in the document.
+
+**Degradation is never silent.** Every fallback appends a structured record and emits an
+SSE `degradation` event. A degraded answer is never visually indistinguishable from a
+healthy one.
+
+## 7. Problems I hit
+
+**Table rows lost their columns.** The assistant answered `55.0` for February's
+Manufacturing PMI when the real answer was `56.9`, and invented `26.2%` for a June cell
+that is blank. Both were real values from the same row, in the wrong column. Flattened to
+prose, a table row is a sequence of numbers with nothing tying each to its header, and a
+sparse row cannot even be counted positionally. Widening pdfplumber's table detection was
+the obvious fix and I had already measured it as dangerous (text strategy alone found 16
+tables on a page that has 1, and dropped another document from 50 to 9). Numeric tables are
+right aligned, so I recovered the columns from geometry instead by clustering right edges.
+Both questions answer correctly now, and word coverage did not move on any document.
+
+**Half a document was being deleted.** Text sitting beside a table was never read at all.
+Coverage on that file went from 50.0% to 62.5% once columns beside a table were assigned
+properly rather than cropped.
+
+**Twenty fund pages were indistinguishable.** A question about one fund's Net AUM returned
+another fund's. The chunk holding the answer read "Net AUM : 6,634.45 crore" under the
+heading "AUM as on June 30, 2026", and both lines were identical on nineteen other pages,
+so the right chunk sat at rank 28 of 40. Fixed by nesting headings by font size and
+prepending the section path to the embedded text. That question now answers correctly at
+the highest relevance in the set.
+
+**The daily token cap that no header shows.** Generation quality dropped mid testing.
+Groq's strongest model is metered at 100k tokens per day, which is invisible in the per
+minute rate limit headers and only appears in an error body. The fix was a configured
+fallback model, with the switch surfaced as a degradation event rather than hidden.
+
+**The fallback then 413'd.** It had a smaller context window than the primary, and the
+prompt was still being built at the primary's size. A 413 is not retryable, so the fallback
+failed every time it was needed. The fallback now rebuilds its prompt at its own budget.
+
+**Four graders were wrong before the pipeline was.** A refusal grader missed an inflection
+("not reported" was matched, "do not report" was not) and scored a correct refusal as a
+hallucination. A citation splitter dropped trailing markers, under reporting coverage on
+every real turn. A multi turn grader compared the last turn's text against the first turn's
+expectation. Every one of them moved the number down, which is what made them worth
+finding: a bad result sent me to check the grader first from then on.
+
+**A relevance floor cannot tell "right topic, missing fact".** When abstention
+underperformed, the obvious move was a better relevance signal. I tested four across all 53
+eval questions. In every one, the should decline questions sat inside the answerable range,
+because they ask for a figure the corpus plausibly could hold but does not, so retrieval
+correctly returns on topic chunks and correctly scores them highly. No threshold separates
+them. The floor is now a backstop against degenerate retrieval, and the grounding prompt
+does the actual refusing.
+
+**A shortcut I had tuned turned out to cost more than it saved.** Rerank was skipped when
+fusion looked decisive, and I had tuned the threshold to maximise Cohere savings. Then I
+measured what the skipped queries lost: the reranker promotes a different top passage 29%
+of the time, and top 5 overlap never exceeds 56% at any threshold. The skip is disabled.
+The lesson was to ask what a change costs, not only what it saves.
+
+**Retrieval was not the bottleneck.** The right passage reached the model 94% of the time
+and six of those answers were still wrong. A single accuracy number would have hidden that
+and sent me to tune the one stage that was already working.
+
+## 8. Testing
+
+The brief asks for "basic tests", which I read as: show that you can test the thing, and
+cover the paths that matter. I went further in a few specific places, and only where a bug
+would produce a plausible looking result instead of an error.
+
+**375 tests, no live services needed, all running in CI.**
+
+| Suite | Count | Covers |
+|---|---|---|
+| Backend (`pytest`) | 309 | The offset property (every chunk span round trips through `normalized_text`), RRF arithmetic, guardrail gating on both reranked and un-reranked paths, citation marker normalisation, idempotent re-ingest, the full error taxonomy, SSE frame ordering. Ten integration tests run against real Postgres and Qdrant. |
+| Frontend (`vitest`) | 66 | The hand rolled SSE parser, the chat turn reducer, the REST error envelope, the citation chip's three verification states. |
+
+```bash
+# Backend
+cd backend
+poetry run pytest -q
+poetry run ruff check app tests scripts evals
+poetry run mypy app
+
+# Frontend
+cd frontend
+pnpm test
+pnpm lint
+pnpm exec tsc --noEmit
+```
+
+**The acceptance test.** Unit tests cover components in isolation. This is the one that
+proves the product works:
 
 ```bash
 cd backend
-poetry run pytest -q                                    # 292 tests; 10 integration tests skip unless postgres+qdrant are up
-poetry run ruff check app tests scripts evals
-poetry run mypy app
-PYTHONPATH=. poetry run python scripts/verify_api.py     # acceptance test against a live stack
+PYTHONPATH=. poetry run python scripts/verify_api.py
 ```
 
-`verify_api.py` is the honest end-to-end check: it uploads real documents into the running
-API, waits for ingest, asks a question, resolves a citation back to the literal characters
-in the source document, asks a follow-up with a pronoun and confirms it resolves against
-conversation memory, confirms the conversation persisted in Postgres, and exercises the
-error taxonomy (404, validation 400, unsupported media type). Unit tests cover components
-in isolation; this is what actually proves the product works.
+It uploads real documents into a running API, waits for ingest, asks a question, resolves a
+citation back to the literal characters in the source, asks a follow up containing a pronoun
+and confirms it resolves against conversation memory, confirms the conversation persisted,
+and exercises the error taxonomy. 32 checks.
 
-## Architecture
+**Adversarial and measurement scripts.**
 
-![Architecture](architecture.svg)
-
-Three stores, kept deliberately separate:
-
-- **Qdrant** - chunk vectors, dense (`bge-small-en-v1.5`, fastembed) and sparse (`Qdrant/bm25`)
-  named vectors in one collection, fused server-side with weighted RRF in a single call.
-- **Postgres** - documents, a chunk mirror for citation resolution, conversations, messages,
-  per-citation retrieval trace (`message_citations`), workspaces.
-- **Conversation state** - rolling summary and entity ledger, updated after a turn completes,
-  never during it, and never read by retrieval. User preferences live in a fourth table and
-  are equally excluded from the query path - a stored tone preference must never silently
-  distort what gets searched.
-
-**Ingest** (in-process background task, not a separate worker - 750 free instance-hours on
-Render is not enough for two services): upload -> tiered parse -> sanitize -> chunk -> dedup ->
-embed -> upsert. Tier 1 is local (`pypdf`/`pdfplumber`); a page a cheap local heuristic flags
-as complex escalates to a vision model through the same LLM adapter used for generation.
-Qdrant is written before Postgres - an orphaned vector is recoverable by re-running ingest, an
-orphaned citation row is not.
-
-**Query** (a LangGraph state graph, one shared `QueryState`): `route -> rewrite -> retrieve ->
-rerank -> grade -> generate`, with `verify` off the request path and `history`/`refuse`/`abstain`
-as terminal nodes. Raw-query retrieval fires in parallel with `rewrite`, and the second Qdrant
-call is skipped outright when the rewrite changed nothing - most turns therefore cost exactly
-one retrieval round trip, not two.
-
-The frontend is a workspace shell (Next.js App Router): a named group of documents that many
-conversations share - upload once, open as many chats against that set as you like. `POST
-/chat` streams Server-Sent Events over `fetch` + `ReadableStream`, not the browser's native
-`EventSource` - that API is GET-only and cannot carry the auth header a POST-based chat
-stream needs, so contract mentions of `EventSource` describe intent, not the literal API used.
-
-## What each requirement actually does
-
-| Requirement | Where it lives |
+| Script | What it does |
 |---|---|
-| Upload/manage multiple documents | `POST/GET/DELETE /documents`, live ingest progress over SSE, per-workspace document lists in the sidebar |
-| Chunk + embed + store in a vector DB | `app/ingest/chunk.py` (parent-child), `app/ingest/embed.py` (fastembed), `app/retrieval/qdrant_store.py` |
-| Multi-turn chat with context memory | `app/memory/conversation.py` (rolling summary + entity ledger), coreference resolution in the `rewrite` node |
-| Grounded answers with citations | Delimited DATA blocks in `app/graph/prompts.py`, `[n]` markers resolved to `char_start`/`char_end` in `normalized_text` |
-| Conversations in a DB | Postgres - `conversations`, `messages`, `message_citations` |
-| Clean REST API with error handling | One error envelope (`app/errors.py`) - every failure carries `code`, `message`, `request_id`; 404 rather than 403 for cross-user access, so a taxonomy lookup can't double as an enumeration oracle |
-| Streaming responses (bonus) | `POST /chat` SSE - token deltas, pipeline stage events, degradation events, all on one connection |
-| Auth (bonus) | Clerk, skipped cleanly in `AUTH_MODE=dev` so the assignment can be evaluated with zero account setup |
-| Hybrid search / re-ranking (bonus) | Server-side weighted RRF (dense + sparse) + conditional Cohere rerank |
-| CI (bonus) | `.github/workflows/ci.yml` - lint, typecheck and the full test suite on every push, with Postgres and Qdrant as service containers so the integration tests actually run rather than skip |
+| `scripts/probe_guardrails.py` | Attacks the prompt guardrails with a hostile document. 8 of 8 pass. |
+| `scripts/probe_rrf_rank_base.py` | Measures whether Qdrant ranks RRF from 0 or 1. Every relevance threshold derives from this, so re-run it after a Qdrant version bump. |
+| `scripts/probe_golden_set.py` | Confirms every expected fact survived parsing, before spending tokens on an eval. |
+| `evals/run.py` | The full eval. Reports retrieval, answer, refusal and citation accuracy separately. |
 
-## Design decisions
+**What CI runs.** Lint, typecheck and both test suites on every push, with Postgres and
+Qdrant as service containers so the integration tests actually execute instead of skipping
+themselves. The eval and `verify_api.py` are deliberately not gated, because both need live
+API keys and a job that goes green because a secret is unset reports "tests pass" while
+testing nothing.
 
-**Why hybrid retrieval, server-side.** Dense embeddings miss exact identifiers and error
-codes; BM25 misses paraphrase. Qdrant's own weighted-RRF query (`prefetch: [dense, sparse]` +
-`rrf`) fuses both in one round trip with `k` pinned in config - never inherited from the
-server default, because `RRF_MAX` is computed analytically from `k` and the weights, and an
-unpinned `k` would make every relevance threshold derived from it silently mean nothing on
-the next Qdrant version bump.
+## 9. Known limitations
 
-**Why conditional rerank, not always-on.** Cohere's trial key is 1,000 calls/month at 10 rpm
-- reranking unconditionally would cap the whole deployment at roughly a thousand lifetime
-queries. Rerank is skipped when fusion is already *decisive*: the top result beats the
-runner-up by a measured margin **and** is ranked top-3 by both the dense and sparse branch
-independently. Cross-branch agreement is the signal, not margin alone - a huge margin on a
-result invisible to one branch is one-sided evidence, exactly when a cross-encoder earns its
-call. The margin threshold was tuned from a live probe (`scripts/probe_decisive_margin.py`)
-rather than guessed: the naive placeholder (`1.5`) turned out to be *unreachable* given how
-RRF scores are actually shaped, so it fired zero times across 53 real questions until
-corrected to `1.02`.
+Stated here rather than left for a reviewer to find.
 
-**Why bounded CRAG, not an open agent.** The query graph retries retrieval at most once when
-retrieved relevance is low, then abstains rather than guessing. An agent that could loop
-indefinitely or choose its own tools trades a bounded latency budget for unbounded cost and
-unpredictable failure modes, for a task (search these documents, answer the question) that
-does not need that generality. LangGraph is used for its checkpointing and per-node event
-streaming - the nodes are called directly rather than through `graph.ainvoke` so the SSE
-contract's exact frame ordering is guaranteed by code, not by trusting the graph runtime's
-internals - not for autonomy.
-
-**The citation chain, end to end.** `build_normalized_text(Block[]) -> (text, spans)` is the
-*only* function permitted to concatenate parsed content into a document's text - sanitisation
-and derived-block insertion happen inside it, before offsets are assigned, and the resulting
-string is immutable afterward. Every chunk's `char_start`/`char_end` indexes into that exact
-string, all the way through retrieval, generation, and the citation the frontend renders - a
-click on `[2]` scrolls the source pane to the literal characters the model read, not an
-approximation. This is the one piece of schema that could not be retrofitted, and it was
-built first for that reason.
-
-**Retrieved document text is an untrusted input channel.** Users upload arbitrary PDFs, and
-the model reads their content - this is a prompt-injection surface almost every "chat with
-your documents" demo overlooks. Chunk content is wrapped in delimited `[[[DOCUMENT n]]]`
-blocks with explicit data-not-instruction framing, and the delimiter sequence is escaped
-inside chunk text (`[[[` -> `[ [ [`) so a document cannot forge its own block boundary and
-smuggle an instruction out of its wrapper.
-
-**Degradation is never silent.** Every fallback - Cohere unavailable, rerank rate-limited, a
-rewrite that timed out, the primary LLM's daily quota exhausted - appends a structured
-`Degradation` record and emits an SSE `degradation` event, so a degraded answer is never
-visually indistinguishable from a healthy one. This showed up as a real, load-bearing decision
-rather than a nice-to-have: Groq's free tier metered the strongest generation model at 100k
-tokens/day, invisible in the per-minute rate-limit headers and only surfaced in the error
-body. The fix - a configured fallback model that a degraded turn switches to, with the switch
-itself surfaced as a `degradation` event - is now how the app survives a quota exhausted
-mid-demo instead of returning a bare 503.
-
-**A relevance floor is a backstop, not a judge - and this was measured, not assumed.**
-G2 gates on `0.6·max + 0.4·mean` over the retrieval scores. The obvious next move when
-abstention underperforms is "the signal is wrong, use a better score." That was tested
-directly (`scripts/probe_relevance_signal.py`, all 53 eval questions, four candidate signals):
-
-| Signal | Separation (median gap / pooled sd) | Best achievable accuracy |
-|---|---|---|
-| fused RRF, all 40 candidates | +0.85 | 79% |
-| fused RRF, top 5 | +0.89 | 74% |
-| dense cosine, all 40 | +0.60 | 81% |
-| dense cosine, top 5 | +0.72 | 81% |
-
-In all four the should-decline population sits *inside* the answerable range, so no threshold
-separates them - at 0.65 the gate never fires, at 0.80 it trades seven answerable questions for
-seven declines, at 0.85 it rejects 33 of 39 answerable ones. The reason is structural rather
-than a tuning miss: the unanswerable questions are *topically adjacent* - they ask for a figure
-the corpus plausibly could hold but does not - so retrieval correctly returns on-topic chunks
-and correctly scores them highly. Telling "right topic, missing fact" apart requires reading
-the passage, which is exactly what the grounding prompt in `generate` does and what no scalar
-retrieval score can encode. `FLOOR_FUSED` is therefore set *below* the entire observed
-answerable range: it catches degenerate retrieval and never arbitrates a close call it
-provably cannot judge. Over-refusal is the worse failure - a user cannot tell a refusal from a
-broken product.
-
-This measurement also overturned an earlier conclusion recorded in this repo. A smaller,
-biased sample (n=25, drawn only from questions that happened to skip rerank in one run) had
-suggested RRF was structurally incapable and dense cosine was the fix. Measured uniformly
-across all 53 questions, RRF separates *better* than dense cosine and the accuracy gap is one
-question. The change that sample would have justified was not worth making.
-
-**Unknown is not zero.** A citation's `verified` field is `boolean | null`, never defaulted to
-`false`. Claim-level verification runs asynchronously, off the request path, after the answer
-has already streamed - if it fails or never completes, the citation stays in its neutral,
-not-yet-checked state rather than being reported as *unsupported*, which would be a specific,
-false claim about a passage nobody actually checked.
-
-**Rejected, with reasons on record:** HyDE (a live probe showed no measurable retrieval
-improvement over query rewriting for this corpus shape), GraphRAG (this is a bounded document
-set, not the kind of multi-hop entity network that graph retrieval earns its complexity for),
-embedding fine-tuning (no labelled corpus to fine-tune against, and `bge-small` already fits
-the 512 MB ceiling), client-side dense/sparse fusion (Qdrant does this server-side in one
-call - reimplementing it in application code would be solving an already-solved problem,
-worse), and Railway (Render's free tier facts were verified directly; Railway's were not, and
-guessing infrastructure limits is exactly the kind of unverifiable claim this project avoids).
-
-**LlamaParse (Tier 3 parsing) is out of scope.** Tier 1 (local `pypdf`/`pdfplumber`) plus Tier
-2 (VLM escalation for pages a cheap heuristic flags as complex) already covers the table and
-figure story; a paid third-party parsing tier adds cost and an unconfirmed free tier for a
-problem the first two tiers already solve.
-
-## Invariants
-
-The full list lives in the retrieval pipeline contract; the ones most easily broken by
-reasonable-looking code:
-
-- **Degradation is never silent** (see above).
-- **Unknown is not zero** - a failed judge yields `null`, never `false`.
-- **`user_id` scopes everything** - every Postgres query and every Qdrant search carries it;
-  there is no unscoped read path. Enforced by function signature, not by discipline: a
-  repository function that omits `user_id` is a type error at the call site, not a runtime bug
-  waiting to be found.
-- **Offsets are into `normalized_text`** - never raw file bytes, never a chunk's own text.
-- **No per-query renormalisation, ever.** `RRF_MAX` is computed from configuration
-  (`(w_dense + w_sparse) / (k + rank_base)`), never from the observed maximum of a candidate
-  set. Self-normalising forces the top score to `1.0` on every query and makes the relevance
-  gate structurally incapable of firing - the single easiest-looking optimisation in this
-  codebase to get wrong, which is why it is a named invariant rather than left implicit.
-- **Retrieval is hard-capped at two attempts** - one corrective retry, then abstain. A retry
-  loop with no ceiling is not "more thorough," it is an unbounded latency budget with a
-  plausible-sounding excuse.
-
-## What's deliberately unresolved
-
-A few constants are placeholders rather than decisions, because they need a real corpus and
-guessing them now would be tuning dressed up as an architectural choice:
-
-- RRF branch weights (`w_dense`, `w_sparse`)
-- Child/parent chunk token sizes, the G1 route-gate threshold, and the verbatim-turn count
-  before rolling summarisation kicks in.
-
-`DECISIVE_RATIO`, `FLOOR_RERANK` and `FLOOR_FUSED` **are** resolved - all three set from live
-measurement against the eval corpus rather than left as placeholders (see
-[Design decisions](#design-decisions)).
-
-## Testing
-
-- **292 backend unit tests** (`poetry run pytest -q`), LLM and Cohere calls mocked - covers
-  the offset property (every chunk's span round-trips through `normalized_text`), the RRF
-  arithmetic, guardrail gating on both the reranked and un-reranked paths, citation-marker
-  normalisation across bracket styles, idempotent re-ingest, the full error taxonomy, and SSE
-  frame ordering guarantees.
-- **`scripts/verify_api.py`** - the acceptance test against a live stack, described above.
-- **Frontend**: `pnpm build`, `pnpm lint`, `tsc --noEmit`, all clean.
-- **CI** (`.github/workflows/ci.yml`) runs all of the above on every push. Postgres and
-  Qdrant run as service containers so the ten integration tests - real write ordering, real
-  hybrid search, cascading delete - execute rather than skipping themselves. The eval suite and
-  `verify_api.py` are deliberately *not* gated: both need live LLM and Cohere keys, and a job
-  that goes green because a secret is unset reports "tests pass" while testing nothing.
-- **Not yet built**: an ablation table (dense-only / BM25-only / RRF / RRF+rerank recall
-  comparison).
-
-## Repository layout
-
-```
-backend/
-  app/
-    ingest/       parsing, sanitisation, chunking, embedding, upsert
-    retrieval/    Qdrant hybrid search, Cohere rerank, cross-formulation fusion
-    graph/        the LangGraph query pipeline, prompts, claim verification
-    memory/       rolling summary + entity ledger
-    api/          documents, chat (SSE), conversations, workspaces
-    llm/          provider-agnostic adapter (Gemini/Groq/Anthropic), pacing, cache
-    db/           SQLAlchemy models + Alembic migrations
-  scripts/        verify_api.py, corpus ingest, RRF/decisive-margin probes
-  evals/          golden-set questions + eval runner (manual - needs live API keys)
-  tests/
-frontend/
-  app/            Next.js App Router pages, incl. sign-in/sign-up
-  components/     ChatPane, WorkspaceSidebar, DocumentManager, SourcePane, ...
-  hooks/          useChatStream (SSE reducer), useSessionToken
-  lib/            REST client, SSE parser, wire types mirroring the backend contract
-obsidian_vault/   the design record - read before changing an architectural decision
-architecture.svg  live diagram, embedded above
-docker-compose.yml
-```
-
-## Known limitations
-
-Stated plainly rather than left for a reviewer to discover:
-
-- **No ablation table.** The retrieval design (hybrid + conditional rerank) is justified by
-  reasoning and by two live measurement scripts (`probe_rrf_rank_base.py`,
-  `probe_decisive_margin.py`), but a side-by-side recall comparison across dense-only /
-  BM25-only / RRF / RRF+rerank was not built this pass.
-- **A relevance floor cannot detect "right topic, missing fact."** Measured across four
-  candidate signals (see [Design decisions](#design-decisions)); none separates answerable from
-  unanswerable questions, because the unanswerable ones are topically adjacent and retrieval
-  correctly scores them highly. The floor is therefore a backstop against degenerate retrieval,
-  and the generator's grounding prompt is the real refusal mechanism. That is a property of the
-  approach, not a bug to be tuned away.
-- **Free-tier LLM quotas are real and visible.** Groq's strongest model is metered at 100k
-  tokens/day; a burst of testing can exhaust it, and the app is designed to degrade to a
-  smaller model with a visible `degradation` event rather than hide the fact. If answers look
-  visibly simpler than expected, check the SSE stream for a `degradation` event naming the
-  fallback before assuming the retrieval pipeline is at fault.
-- **The sign-in/sign-up pages are unverified against a live Clerk account** - they were built
-  and tested for correct fallback behaviour with no Clerk key configured (which is the
-  evaluated path, since `AUTH_MODE=dev` needs no account), but the actual styled Clerk flow has
-  not been exercised end-to-end against real credentials.
+- **No ablation table.** A side by side recall comparison across dense only, BM25 only, RRF
+  and RRF plus rerank was not built. The retrieval design is justified by reasoning and by
+  two live probes, but not by that specific table.
+- **Aggregation questions are out of reach.** "Which manager appears across the most fund
+  pages" cannot be answered by top-k retrieval by construction. It is in the eval set,
+  labelled, so it is measured rather than hidden.
+- **The Original tab's highlight is best effort.** It matches cited text against pdf.js's
+  text layer, because no bounding boxes are persisted. The Text tab's highlight is offset
+  driven and cannot be wrong.
+- **The Clerk sign in flow has not been exercised against a live account.** It was built and
+  tested for correct fallback with no key configured, which is the path a reviewer running
+  Compose actually takes.
+- **Free tier quotas are real and visible by design.** If answers look simpler than
+  expected, check the stream for a `degradation` event naming a fallback model before
+  assuming retrieval is at fault.

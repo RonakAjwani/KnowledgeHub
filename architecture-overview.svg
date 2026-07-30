@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 1010" width="860" height="1010" font-family="Inter, 'Segoe UI', system-ui, sans-serif">
+
+  <!-- ============================================================
+       KnowledgeHub - Architecture. Single source of truth.
+       LIVE DOCUMENT: update this file whenever the design moves.
+
+       SIZING RULE, do not break it: the canvas is 860 wide because a
+       GitHub README column is about 880. Any wider and the browser
+       scales the whole thing down and the labels stop being readable,
+       which is the one failure mode that makes a diagram worthless.
+       Every box therefore carries a name and at most one short line.
+       The reasoning lives in README section 6, not in here.
+
+       Layout contract (keep consistent when editing):
+         full-width bands ... x =  25 .. 835
+         ingest column    ... x =  25 .. 420   (boxes  37 .. 408)
+         query  column    ... x = 440 .. 835   (boxes 452 .. 797)
+         retry corridor   ... x = 797 .. 835   (kept clear of boxes)
+
+       The two pipelines are parallel columns, not stacked bands.
+       Stacked, the arrow from the API to the lower pipeline has to
+       cross the upper one; side by side, every arrow is a short
+       straight line and nothing crosses anything.
+       ============================================================ -->
+
+  <defs>
+    <style>
+      .band      { fill:#FFFFFF; stroke:#DADCE0; stroke-width:1.5; rx:10; }
+      .bandlabel { font-size:11.5px; font-weight:700; letter-spacing:.05em; fill:#5F6368; }
+      .t         { font-size:14.5px; font-weight:600; fill:#202124; }
+      .tq        { font-size:14px; font-weight:600; fill:#202124; }
+      .mono      { font-size:12.5px; font-weight:600; fill:#202124; font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace; }
+      .d         { font-size:11px; fill:#5F6368; }
+      .ds        { font-size:9.5px; fill:#5F6368; }
+      .edge      { font-size:9.5px; fill:#5F6368; font-style:italic; }
+
+      .n-client  { fill:#E8F0FE; stroke:#1A73E8; stroke-width:1.5; rx:7; }
+      .n-api     { fill:#EDE7F6; stroke:#6A3AB2; stroke-width:1.5; rx:7; }
+      .n-proc    { fill:#FFFFFF; stroke:#6A3AB2; stroke-width:1.5; rx:7; }
+      .n-key     { fill:#F3E8FD; stroke:#6A3AB2; stroke-width:2.4; rx:7; }
+      .n-off     { fill:#FFFFFF; stroke:#9AA0A6; stroke-width:1.5; rx:7; stroke-dasharray:6 4; }
+      .n-data    { fill:#E6F4EA; stroke:#1E8E3E; stroke-width:1.5; rx:7; }
+      .n-ext     { fill:#FEF7E0; stroke:#E37400; stroke-width:1.5; rx:7; }
+
+      .flow      { stroke:#3C4043; stroke-width:1.8; fill:none; }
+      .flow-r    { stroke:#C5221F; stroke-width:1.6; fill:none; stroke-dasharray:5 4; }
+    </style>
+
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3C4043"/></marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#C5221F"/></marker>
+  </defs>
+
+  <rect width="860" height="1010" fill="#FAFAFA"/>
+
+  <!-- ================= TITLE ================= -->
+  <text x="25" y="38" font-size="19" font-weight="700" fill="#202124">KnowledgeHub - Architecture</text>
+  <text x="25" y="60" class="d">Multi-document RAG with chat memory. Hybrid retrieval, a bounded corrective loop, and citations that resolve to exact source offsets.</text>
+
+  <!-- ================= BAND 1 - BROWSER ================= -->
+  <rect class="band" x="25" y="78" width="810" height="92"/>
+  <text x="41" y="99" class="bandlabel">1. BROWSER  |  Next.js App Router, TypeScript, Tailwind</text>
+
+  <rect class="n-client" x="37" y="110" width="254" height="52"/>
+  <text x="53" y="132" class="t">Document manager</text>
+  <text x="53" y="150" class="d">upload, delete, scope a query</text>
+
+  <rect class="n-client" x="303" y="110" width="254" height="52"/>
+  <text x="319" y="132" class="t">Chat pane</text>
+  <text x="319" y="150" class="d">streamed tokens, [n] chips</text>
+
+  <rect class="n-client" x="569" y="110" width="254" height="52"/>
+  <text x="585" y="132" class="t">Source pane</text>
+  <text x="585" y="150" class="d">click a chip, see the exact span</text>
+
+  <path class="flow" d="M430,170 L430,202" marker-end="url(#a)"/>
+  <text x="442" y="190" class="edge">SSE over fetch + ReadableStream, not EventSource</text>
+
+  <!-- ================= BAND 2 - API ================= -->
+  <rect class="band" x="25" y="206" width="810" height="74"/>
+  <text x="41" y="227" class="bandlabel">2. FASTAPI  |  Clerk JWT or AUTH_MODE=dev  |  one error envelope  |  user_id scopes every read</text>
+
+  <rect class="n-api" x="37" y="238" width="191" height="42"/>
+  <text x="51" y="256" class="mono">/documents</text>
+  <text x="51" y="271" class="ds">upload, list, delete</text>
+
+  <rect class="n-api" x="236" y="238" width="191" height="42"/>
+  <text x="250" y="256" class="mono">/chat</text>
+  <text x="250" y="271" class="ds">SSE stream</text>
+
+  <rect class="n-api" x="435" y="238" width="191" height="42"/>
+  <text x="449" y="256" class="mono">/conversations</text>
+  <text x="449" y="271" class="ds">replayed history</text>
+
+  <rect class="n-api" x="634" y="238" width="191" height="42"/>
+  <text x="648" y="256" class="mono">/workspaces</text>
+  <text x="648" y="271" class="ds">named doc sets</text>
+
+  <!-- One straight arrow, one elbow. Neither crosses a band. -->
+  <path class="flow" d="M132,280 L132,314" marker-end="url(#a)"/>
+  <text x="142" y="302" class="edge">upload</text>
+
+  <path class="flow" d="M331,280 L331,296 L624,296 L624,314" marker-end="url(#a)"/>
+  <text x="470" y="291" class="edge">ask</text>
+
+  <!-- ================= BAND 3 - INGEST ================= -->
+  <rect class="band" x="25" y="318" width="395" height="516"/>
+  <text x="41" y="339" class="bandlabel">3. INGEST  |  async background task</text>
+
+  <rect class="n-proc" x="37" y="352" width="371" height="58"/>
+  <text x="53" y="375" class="t">parse</text>
+  <text x="53" y="395" class="d">pypdf + pdfplumber; VLM for complex pages</text>
+  <path class="flow" d="M222,410 L222,432" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="37" y="432" width="371" height="58"/>
+  <text x="53" y="455" class="t">sanitize</text>
+  <text x="53" y="475" class="d">strip hidden text, count it, never reject</text>
+  <path class="flow" d="M222,490 L222,512" marker-end="url(#a)"/>
+
+  <rect class="n-key" x="37" y="512" width="371" height="58"/>
+  <text x="53" y="535" class="mono">build_normalized_text()</text>
+  <text x="53" y="555" class="d">one concatenation, immutable; offsets index here</text>
+  <path class="flow" d="M222,570 L222,592" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="37" y="592" width="371" height="58"/>
+  <text x="53" y="615" class="t">chunk</text>
+  <text x="53" y="635" class="d">parent + child, heading path, content ids</text>
+  <path class="flow" d="M222,650 L222,672" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="37" y="672" width="371" height="58"/>
+  <text x="53" y="695" class="t">embed</text>
+  <text x="53" y="715" class="d">bge-small dense + bm25 sparse</text>
+  <path class="flow" d="M222,730 L222,752" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="37" y="752" width="371" height="58"/>
+  <text x="53" y="775" class="t">upsert</text>
+  <text x="53" y="795" class="d">Qdrant first, then the Postgres mirror</text>
+
+  <!-- ================= BAND 4 - QUERY ================= -->
+  <rect class="band" x="440" y="318" width="395" height="516"/>
+  <text x="456" y="339" class="bandlabel">4. QUERY  |  LangGraph, bounded</text>
+
+  <rect class="n-proc" x="452" y="352" width="345" height="50"/>
+  <text x="468" y="373" class="tq">route</text>
+  <text x="468" y="391" class="d">history, or a fresh search</text>
+  <path class="flow" d="M624,402 L624,420" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="452" y="420" width="345" height="50"/>
+  <text x="468" y="441" class="tq">rewrite</text>
+  <text x="468" y="459" class="d">resolve pronouns; raw retrieval in parallel</text>
+  <path class="flow" d="M624,470 L624,488" marker-end="url(#a)"/>
+
+  <rect class="n-key" x="452" y="488" width="345" height="50"/>
+  <text x="468" y="509" class="tq">retrieve</text>
+  <text x="468" y="527" class="d">dense + sparse, weighted RRF, k pinned</text>
+  <path class="flow" d="M624,538 L624,556" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="452" y="556" width="345" height="50"/>
+  <text x="468" y="577" class="tq">rerank</text>
+  <text x="468" y="595" class="d">Cohere; falls back to cache, then fused</text>
+  <path class="flow" d="M624,606 L624,624" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="452" y="624" width="345" height="50"/>
+  <text x="468" y="645" class="tq">grade</text>
+  <text x="468" y="663" class="d">backstop only; below floor, retry once</text>
+  <path class="flow" d="M624,674 L624,692" marker-end="url(#a)"/>
+
+  <rect class="n-proc" x="452" y="692" width="345" height="50"/>
+  <text x="468" y="713" class="tq">generate</text>
+  <text x="468" y="731" class="d">delimited blocks; [n] maps to its chunk</text>
+  <path class="flow" d="M624,742 L624,760" marker-end="url(#a)"/>
+
+  <rect class="n-off" x="452" y="760" width="345" height="50"/>
+  <text x="468" y="781" class="tq">verify</text>
+  <text x="468" y="799" class="d">off the request path; failure yields null</text>
+
+  <!-- The corrective loop, in the corridor kept clear for it. -->
+  <path class="flow-r" d="M797,649 L815,649 L815,513 L801,513" marker-end="url(#ar)"/>
+  <text transform="rotate(-90 833 581)" x="833" y="581" class="edge" fill="#C5221F">retry once</text>
+
+  <!-- ================= COLUMNS INTO THE STORES ================= -->
+  <path class="flow" d="M222,834 L222,866" marker-end="url(#a)"/>
+  <text x="232" y="856" class="edge">writes</text>
+
+  <path class="flow" d="M624,834 L624,866" marker-end="url(#a)"/>
+  <text x="634" y="856" class="edge">reads</text>
+
+  <!-- ================= BAND 5 - STORES ================= -->
+  <rect class="band" x="25" y="870" width="810" height="100"/>
+  <text x="41" y="891" class="bandlabel">5. STORES AND EXTERNAL SERVICES</text>
+
+  <rect class="n-data" x="37" y="900" width="191" height="58"/>
+  <text x="51" y="919" class="mono">Qdrant</text>
+  <text x="51" y="935" class="ds">dense + sparse in one</text>
+  <text x="51" y="948" class="ds">collection, weighted RRF</text>
+
+  <rect class="n-data" x="236" y="900" width="191" height="58"/>
+  <text x="250" y="919" class="mono">Postgres</text>
+  <text x="250" y="935" class="ds">documents, chunk mirror,</text>
+  <text x="250" y="948" class="ds">conversations, citations</text>
+
+  <rect class="n-ext" x="435" y="900" width="191" height="58"/>
+  <text x="449" y="919" class="mono">LLM adapter</text>
+  <text x="449" y="935" class="ds">Groq / Anthropic / Gemini,</text>
+  <text x="449" y="948" class="ds">fallback model on quota</text>
+
+  <rect class="n-ext" x="634" y="900" width="191" height="58"/>
+  <text x="648" y="919" class="mono">Cohere</text>
+  <text x="648" y="935" class="ds">conditional rerank,</text>
+  <text x="648" y="948" class="ds">circuit breaker on a 402</text>
+
+  <!-- ================= FOOTER ================= -->
+  <text x="25" y="992" class="ds">Invariants: degradation is never silent  |  unknown is not zero  |  user_id scopes every read  |  offsets index normalized_text  |  RRF_MAX is analytic</text>
+
+</svg>

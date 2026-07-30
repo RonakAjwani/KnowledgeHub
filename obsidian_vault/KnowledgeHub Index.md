@@ -31,7 +31,7 @@ Master index for the KnowledgeHub CV assessment - a Multi-Document RAG Assistant
 
 ## Artifacts
 
-- `architecture.svg` (project root) - **live** architecture diagram. Update whenever the design changes; will be embedded in the README. Layout contract is documented in an XML comment at the top of the file. Known to need further work.
+- `architecture-overview.svg` (project root) - **live** architecture diagram, embedded in the README. The only one: the denser `architecture.svg` was deleted on 2026-07-31 because at 1720px wide nothing in it survived GitHub scaling it into a README column. Layout contract, including the 860px width rule that keeps it legible, is an XML comment at the top of the file. Check it at ~640px after any edit.
 
 ## Working principles
 

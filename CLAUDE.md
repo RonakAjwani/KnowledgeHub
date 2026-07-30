@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **There is no source code yet, and no git repo.** The project is a CV assessment - KnowledgeHub, a multi-document RAG assistant with chat memory ([AI_Engineer_Assignment.md](AI_Engineer_Assignment.md)) - whose research phase closed 2026-07-27. Everything currently in the tree is specification:
 
 - [obsidian_vault/](obsidian_vault/) - the design record. Flat, Title Case filenames, `[[wikilinks]]` at the bottom of each note.
-- [architecture.svg](architecture.svg) - **live** diagram, embedded in the README later. Its layout contract (column x-ranges, six bands, off-page connectors) is an XML comment at the top of the file; keep to it when editing.
+- [architecture-overview.svg](architecture-overview.svg) - **live** diagram, embedded in the README. It is the only architecture diagram; the older, denser `architecture.svg` was deleted because nothing in it was legible once GitHub scaled it into a README column. Its layout contract (column x-ranges, five bands, the 860px width rule) is an XML comment at the top of the file; keep to it when editing, and re-check legibility at ~640px after any change.
 
 ## Commands
 
@@ -100,7 +100,7 @@ Retrieved document text is an **untrusted input channel** - users upload arbitra
 
 ## Working conventions
 
-- **Update the vault as decisions land**, and `architecture.svg` whenever the design changes. Vault notes are the memory between sessions.
+- **Update the vault as decisions land**, and `architecture-overview.svg` whenever the design changes. Vault notes are the memory between sessions.
 - **Flag unverifiable facts; do not guess.** Rate limits, free-tier boundaries, and version numbers go to [Open Verification Questions](obsidian_vault/Open%20Verification%20Questions.md) - Ronak fetches current docs rather than receiving a confidently wrong answer built on a stale prior.
 - **Do not invent the deliberately-unresolved constants** (RRF branch weights, `DECISIVE_RATIO`, `FLOOR_RERANK`/`FLOOR_FUSED`, child/parent sizes, G1 threshold, verbatim turn count `N`, VLM render DPI, max escalated pages, embed batch size). They need a corpus; picking them now is guessing dressed as a decision. Wire them in `config.py` as env-overridable placeholders and set them in the first tuning pass - which blocks on Ronak's corpus and golden set, and on the one empirical check that settles whether Qdrant's RRF ranks from 0 or 1.
 - **The brief is not a spec to follow verbatim.** The assessment measures problem-solving and the ability to build complex applications, so depth beats feature coverage. Simplifications with a stated reason score well; README padding does not.

@@ -9,7 +9,7 @@ Locked choices for [[KnowledgeHub Assignment Requirements]]. Carried over from [
 | Vector DB | **Qdrant** | dense + sparse named vectors, one collection; server-side RRF/DBSF; best-in-class filtering for per-document scoping |
 | Relational DB | **Postgres** | conversations, messages, documents, chunks mirror, citations |
 | Backend | **FastAPI** | carried over |
-| Frontend | **Next.js (App Router) + TS + shadcn/ui + Tailwind** | revised at planning time, 2026-07-27 - was React + Vite. The brief lists React/Next.js, so either satisfies it; Next.js is the better fit for the Vercel target and matches the `@clerk/nextjs` node already in `architecture.svg`. Package manager `pnpm` |
+| Frontend | **Next.js (App Router) + TS + shadcn/ui + Tailwind** | revised at planning time, 2026-07-27 - was React + Vite. The brief lists React/Next.js, so either satisfies it; Next.js is the better fit for the Vercel target and matches the `@clerk/nextjs` node already in the architecture diagram. Package manager `pnpm` |
 | Backend deps | **Poetry**, `poetry.lock` committed | Compose is the durable deliverable after the Render database expires, so the build must be reproducible from a cold clone. Dependency groups keep `deepeval`/`pytest` out of the 512 MB runtime image |
 | Orchestration | **LangGraph** | for state persistence + node event streaming, not autonomy - see [[Agentic RAG Decision]] |
 | Auth | **Clerk** | over Firebase - smaller surface, hosted UI, straightforward JWT verify in FastAPI |
