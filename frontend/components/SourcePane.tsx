@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { ApiError, api, triggerBrowserDownload } from "@/lib/api";
+import { DocumentView } from "@/components/DocumentView";
 import { fileKind } from "@/lib/fileKind";
 import { CLERK_ENABLED, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -179,6 +180,7 @@ export function SourcePane({
 
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [view, setView] = useState<"original" | "text">("original");
 
   const documentQuery = useQuery({
     queryKey: ["document", documentId],
@@ -191,6 +193,23 @@ export function SourcePane({
   });
 
   const filename = documentQuery.data?.filename ?? null;
+
+  // The uploaded bytes, fetched only for the formats that need them. Markdown
+  // and plain text render from `normalized_text`, so pulling a blob for them
+  // would cost a download to show the same characters.
+  const needsBlob = documentQuery.data?.mime === "application/pdf";
+  const blobQuery = useQuery({
+    queryKey: ["document-blob", documentId],
+    queryFn: async () => {
+      const { blob } = await api.downloadDocumentBlob(
+        documentId as string,
+        await tokenRef.current(),
+      );
+      return blob.arrayBuffer();
+    },
+    enabled: documentId !== null && needsBlob && view === "original",
+    staleTime: 5 * 60_000,
+  });
 
   const download = useCallback(async () => {
     if (!documentId) return;
@@ -316,6 +335,45 @@ export function SourcePane({
           </div>
         </div>
 
+        {documentQuery.isSuccess && (
+          <div
+            role="tablist"
+            aria-label="Source view"
+            className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800"
+          >
+            {(
+              [
+                ["original", "Original"],
+                ["text", "Text"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={view === value}
+                onClick={() => setView(value)}
+                className={cn(
+                  "-mb-px border-b-2 px-3 py-1.5 text-xs font-medium transition-colors",
+                  view === value
+                    ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100"
+                    : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+            {/* Named rather than left to a tooltip. The Original tab locates the
+                passage by matching text against the rendered page, so it can
+                miss; the Text tab is driven by the stored offsets and cannot.
+                A reader deciding whether to trust a highlight needs to know
+                which one they are looking at. */}
+            <span className="ml-auto self-center pr-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+              {view === "text" ? "exact offsets" : "as uploaded"}
+            </span>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-1.5">
           {documentQuery.data && (
             <>
@@ -403,6 +461,19 @@ export function SourcePane({
             </p>
           )}
 
+          {view === "original" ? (
+            <DocumentView
+              mime={documentQuery.data.mime}
+              data={blobQuery.data ?? null}
+              text={text}
+              page={null}
+              cited={
+                highlight && !highlightOutOfRange
+                  ? text.slice(highlight.char_start, highlight.char_end)
+                  : null
+              }
+            />
+          ) : (
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
             {text.length === 0 ? (
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -456,6 +527,7 @@ export function SourcePane({
               </pre>
             )}
           </div>
+          )}
         </div>
       )}
     </Card>
