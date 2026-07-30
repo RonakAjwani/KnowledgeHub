@@ -252,21 +252,51 @@ class Settings(BaseSettings):
     # replied (I1) — it now also means the context was trimmed.
     max_context_tokens_fallback: int = 2000
 
-    # Skip the reranker when fusion is already decisive. Cross-branch agreement
-    # is the real signal: when dense and sparse independently rank the same chunk
-    # first, a cross-encoder is unlikely to overturn it, so the call buys nothing
-    # against a 1,000-call monthly trial.
+    # Skip the reranker when fusion is already decisive — DISABLED by default,
+    # because the premise turned out to be measurably false.
     #
-    # MEASURED 2026-07-28 (`scripts/probe_decisive_margin.py`, 53 questions over
-    # the eval corpus). The placeholder 1.5 was borrowed from a scale that does
-    # not exist here. RRF scores are `w/(k + rank)`, so a chunk ranked 0 in both
-    # branches scores 2/60 = 0.03333 against a runner-up ranked 1 in both at
-    # 2/61 = 0.03279 — a ratio of 1.017. The largest margin observed anywhere in
-    # the corpus was 1.3033, so 1.5 sat above the metric's reachable ceiling and
-    # fired zero times in 53 queries: every single query paid a Cohere call.
-    # At 1.02, 24/53 queries skip (45% of the budget) while still requiring
-    # top-3 agreement in both branches.
-    decisive_ratio: float = 1.02
+    # The idea: when dense and sparse independently rank the same chunk first, a
+    # cross-encoder is unlikely to overturn it, so the call buys nothing against
+    # a 1,000-call monthly trial. Two measurements, in order:
+    #
+    # `scripts/probe_decisive_margin.py` (2026-07-28) established *how often* the
+    # skip fires. RRF scores are `w/(k + rank)`, so rank-0-in-both beats
+    # rank-1-in-both by only 1.017; the largest margin anywhere in the corpus was
+    # 1.30. The original 1.5 therefore sat above the metric's reachable ceiling
+    # and fired zero times. Lowering it to 1.02 made 42% of queries skip.
+    #
+    # `scripts/probe_skip_cost.py` (2026-07-29) then asked whether those skips
+    # were *free*, by forcing a Cohere call on every query with cross-branch
+    # agreement and comparing the orderings:
+    #
+    #   ratio   skips    top-1 agree   top-5 overlap
+    #   1.00    31/53          65%           56%
+    #   1.02    21/53          71%           53%
+    #   1.03    14/53          79%           47%
+    #   1.05     7/53          86%           46%
+    #   1.20     1/53         100%           20%
+    #
+    # The reranker promotes a *different* top passage on ~3 of every 10 skipped
+    # queries, and top-5 overlap never exceeds 56% at any threshold — roughly
+    # half the context set differs. Raising the ratio improves top-1 agreement
+    # but shrinks the saving to nothing and makes overlap worse, because a
+    # high-margin query has one dominant chunk and an arbitrary tail the
+    # reranker reshuffles freely. There is no setting that is both meaningful
+    # and safe.
+    #
+    # We cannot claim both that reranking is the biggest quality jump in the
+    # stack and that skipping it costs nothing. This deployment will serve far
+    # fewer than 1,000 queries, so the budget the skip protects does not bind,
+    # and quality wins. Set to any value at or below ~1.30 to re-enable it for a
+    # deployment where the budget genuinely does bind — the table above is the
+    # trade being bought. Note the skip is not the only budget protection:
+    # exhaustion already falls back to fused order with a visible degradation.
+    #
+    # (Caveat kept deliberately: this measures *divergence* from the reranker,
+    # not proof the reranker is right. The argument holds only because the
+    # design already asserts reranking improves ordering — that is why it is in
+    # the stack and why FLOOR_RERANK trusts its scores.)
+    decisive_ratio: float = 99.0
 
     # Two score sources, therefore two thresholds. Cohere relevance and normalised
     # RRF are different distributions; one shared floor across both is a bug.
