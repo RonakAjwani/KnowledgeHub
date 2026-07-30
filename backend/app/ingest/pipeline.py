@@ -1,6 +1,6 @@
-"""Ingest orchestration: upload → parse → sanitize → chunk → embed → upsert.
+"""Ingest orchestration: upload -> parse -> sanitize -> chunk -> embed -> upsert.
 
-Runs as an in-process background task. Not a separate worker service — that would
+Runs as an in-process background task. Not a separate worker service - that would
 be a second Render service, and 750 free instance-hours per month fits exactly
 one. So ingest shares the API process and its 512 MB ceiling, which is why the
 embedding batch size matters and why escalation is paced rather than fanned out.
@@ -9,10 +9,10 @@ embedding batch size matters and why escalation is paced rather than fanned out.
 
 *Qdrant before Postgres.* An orphaned vector is invisible to the user and
 recoverable by re-running ingest. An orphaned Postgres chunk row is a citation
-that resolves to a vector that does not exist — a broken link in the one feature
+that resolves to a vector that does not exist - a broken link in the one feature
 the whole design is built to make trustworthy.
 
-*Deletion runs the other way:* Qdrant points → Postgres chunks → blob → document
+*Deletion runs the other way:* Qdrant points -> Postgres chunks -> blob -> document
 row. Delete the document row first and the remaining rows are unreachable
 garbage that nothing will ever clean up.
 
@@ -187,7 +187,7 @@ class IngestPipeline:
         data: bytes,
         mime: str,
     ) -> IngestResult:
-        """Run the pipeline. Never raises — failure is recorded on the document.
+        """Run the pipeline. Never raises - failure is recorded on the document.
 
         A partial index is the worst available outcome: the user believes their
         document is searchable and it silently is not. So any stage failure rolls
@@ -235,7 +235,7 @@ class IngestPipeline:
         self, session: AsyncSession, document_id: str, user_id: str, reason: str
     ) -> IngestResult:
         await session.rollback()
-        # Remove any vectors written before the failure — otherwise a retry
+        # Remove any vectors written before the failure - otherwise a retry
         # would layer a second partial index on top of the first.
         try:
             await self.store.delete_document(user_id, document_id)
@@ -257,7 +257,7 @@ class IngestPipeline:
     ) -> None:
         """Cascade in the order that never leaves an unreachable remainder.
 
-        Qdrant points → Postgres chunks → blob → document row. Reversing this
+        Qdrant points -> Postgres chunks -> blob -> document row. Reversing this
         strands rows nothing will ever find again.
         """
         await self.store.delete_document(user_id, document_id)
@@ -294,7 +294,7 @@ def _replace_pages(blocks: list[Block], recovered: dict[int, str]) -> list[Block
             continue
         out.append(block)
 
-    # A page whose Tier-1 pass produced no blocks at all — a pure scan — has
+    # A page whose Tier-1 pass produced no blocks at all - a pure scan - has
     # nothing to replace, so its recovered content is appended in page order.
     for page in sorted(set(recovered) - inserted):
         out.extend(blocks_from_escalation(page, recovered[page]))
@@ -302,7 +302,7 @@ def _replace_pages(blocks: list[Block], recovered: dict[int, str]) -> list[Block
 
 
 def _extraction_confidence(parsed, escalated: int) -> float:
-    """A blunt, honest signal — not a calibrated probability.
+    """A blunt, honest signal - not a calibrated probability.
 
     Flagged pages that were escalated are counted as recovered; flagged pages
     that were not are counted against the score, which is what makes hitting the
@@ -319,7 +319,7 @@ async def _mirror_chunks(session: AsyncSession, chunks: list[Chunk]) -> None:
     """Postgres mirror of the Qdrant points, for citation resolution.
 
     **Upsert, not insert.** Deterministic chunk ids are what make re-ingest
-    idempotent, and Qdrant's ``upsert`` honours that for free — but a plain
+    idempotent, and Qdrant's ``upsert`` honours that for free - but a plain
     ``session.add`` on the Postgres side turns the same determinism into a
     primary-key violation on the second run. The two stores have to agree about
     what "write this chunk again" means, or idempotency holds in one of them and
@@ -380,7 +380,7 @@ async def find_existing_document(
 
     Re-uploading a file returns the existing document with HTTP 200 rather than
     reprocessing it. Scoped to the workspace, not just the user, because the same
-    PDF can legitimately belong to two unrelated workspaces — matches the
+    PDF can legitimately belong to two unrelated workspaces - matches the
     ``uq_documents_user_ws_sha`` constraint exactly, so a second upload under a
     different workspace creates a second row instead of silently returning the
     first workspace's document.

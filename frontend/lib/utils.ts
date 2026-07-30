@@ -1,8 +1,22 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import type { Conversation } from "./types";
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/**
+ * `Conversation.title` is always `null` today - no backend path ever sets it
+ * (confirmed against backend/app/api/chat.py). Anything that displays *or
+ * searches* a conversation must go through this fallback rather than the raw
+ * field, or it silently shows/matches nothing.
+ */
+export function conversationLabel(
+  conversation: Pick<Conversation, "title"> | null | undefined,
+): string {
+  return conversation?.title || "Untitled chat";
 }
 
 /**

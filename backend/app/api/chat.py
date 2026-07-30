@@ -1,4 +1,4 @@
-"""``POST /chat`` — the query stream, plus conversations, messages, preferences.
+"""``POST /chat`` - the query stream, plus conversations, messages, preferences.
 
 ``POST`` rather than ``GET`` because a turn carries a body, which means the
 browser's native ``EventSource`` cannot consume it: that API is GET-only and
@@ -9,7 +9,7 @@ intent, not an API.
 Verification runs **after** the stream's terminal event, on the same connection.
 It could be a poll or a second channel; the same stream is better because the
 client already holds the connection open and the answer does not wait for it. The
-tradeoff — a client that disconnects early misses the patch — is covered by
+tradeoff - a client that disconnects early misses the patch - is covered by
 persisting verdicts and exposing ``GET /messages/{id}``.
 """
 
@@ -47,13 +47,13 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
     # A new conversation started from inside a workspace is tagged with it, so
     # it shows up under that workspace on reload without the client having to
-    # re-send it on every later turn. Ignored once `conversation_id` is set —
+    # re-send it on every later turn. Ignored once `conversation_id` is set -
     # the conversation's own workspace_id wins, since a chat cannot change which
     # workspace it belongs to mid-thread.
     workspace_id: str | None = None
     # None means "every ready document, or every document in the conversation's
     # workspace if it has one". A list scopes retrieval to those documents via a
-    # Qdrant payload filter — the per-document checkboxes in the UI.
+    # Qdrant payload filter - the per-document checkboxes in the UI.
     selected_doc_ids: list[str] | None = None
 
 
@@ -69,7 +69,7 @@ async def chat(
     selected_doc_ids = request.selected_doc_ids
     if selected_doc_ids is None and conversation.workspace_id is not None:
         # Scope to the workspace's own documents rather than every document the
-        # user has ever uploaded — the whole point of a workspace is that a chat
+        # user has ever uploaded - the whole point of a workspace is that a chat
         # inside it only ever searches what was put there.
         doc_rows = await session.execute(
             select(db.Document.id).where(
@@ -157,7 +157,7 @@ async def chat(
             if payload:
                 yield runner.stream.frame("verification.complete", payload)
 
-        # Memory is folded in after the turn, never during — summarising mid-turn
+        # Memory is folded in after the turn, never during - summarising mid-turn
         # would put an LLM call on the critical path of a streaming answer.
         try:
             await update_memory(
@@ -257,7 +257,7 @@ async def _serialise_message(
     session: AsyncSession, user_id: str, message: db.Message
 ) -> dict:
     """Citations here carry the same span and filename info a live turn's
-    `answer.complete` does — not just the evaluation-dataset columns.
+    `answer.complete` does - not just the evaluation-dataset columns.
 
     A reloaded conversation is how the frontend resumes a chat, and its
     citation chips have to resolve to a source span exactly like a fresh
@@ -298,7 +298,7 @@ async def _serialise_message(
                 "page": chunk.page if chunk else None,
                 # A chunk can be gone (I3-scoped delete, or the recoverable half
                 # of the Qdrant-then-Postgres write ordering) while its citation
-                # row remains — the offsets fall back to 0 rather than crashing
+                # row remains - the offsets fall back to 0 rather than crashing
                 # the history load. The chip still shows; it just cannot scroll
                 # anywhere useful, which is the honest outcome for a citation
                 # whose source no longer exists.
@@ -307,7 +307,7 @@ async def _serialise_message(
                 "rank": row.rank,
                 "fused_score": row.fused_score,
                 "rerank_score": row.rerank_score,
-                # NULL stays null — "not checked" is not "unsupported" (I2).
+                # NULL stays null - "not checked" is not "unsupported" (I2).
                 "verified": row.verified,
             }
         )
@@ -330,7 +330,7 @@ async def get_message(
     """The disconnect-recovery path.
 
     The stream is deliberately not resumable, so this is how a client that
-    dropped mid-turn gets final state — including verification verdicts that
+    dropped mid-turn gets final state - including verification verdicts that
     arrived after it stopped listening.
     """
     message = await session.get(db.Message, message_id)

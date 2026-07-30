@@ -1,5 +1,5 @@
 /**
- * Clerk route protection — active only when a publishable key is configured.
+ * Clerk route protection - active only when a publishable key is configured.
  *
  * With no key, this is a pass-through so the app runs unauthenticated against a
  * backend in `AUTH_MODE=dev`. `clerkMiddleware()` with no key throws at request
@@ -12,7 +12,7 @@ import { NextResponse } from "next/server";
 const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 /**
- * Constructed once, and only when Clerk is actually enabled — the SDK logs its
+ * Constructed once, and only when Clerk is actually enabled - the SDK logs its
  * own deprecation notice (in favour of resource-based `auth.protect()` calls
  * per page) the moment this is called, and that would otherwise print on every
  * dev server boot even in `AUTH_MODE=dev`, where Clerk is not in the picture at
@@ -22,7 +22,7 @@ const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
  * unverified rewrite of it.
  */
 const isPublicRoute = clerkEnabled
-  ? createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"])
+  ? createRouteMatcher(["/", "/sign-in(.*)", "/sign-up(.*)"])
   : null;
 
 export default clerkEnabled

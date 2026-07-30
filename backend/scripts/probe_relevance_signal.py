@@ -7,7 +7,7 @@ a floor. Which numbers go into that blend depends on whether rerank ran:
 * rerank skipped  -> `fused_score`, i.e. normalised RRF
 
 The second is suspect by construction. RRF scores a chunk by its *rank*
-(`w/(k+rank)`), not by how similar it is to the query — so the top hit of a
+(`w/(k+rank)`), not by how similar it is to the query - so the top hit of a
 query with no good answer scores almost exactly the same as the top hit of a
 query with a perfect one. If that is true, `FLOOR_FUSED` is comparing a
 near-constant against a threshold and can never fire, which is the same class of
@@ -20,7 +20,7 @@ at zero extra cost and is a real magnitude, not a rank artefact. This script
 compares the two as *separators* between questions the corpus can answer and
 questions it cannot.
 
-Zero LLM calls — Qdrant and the local embedder only.
+Zero LLM calls - Qdrant and the local embedder only.
 
     PYTHONPATH=. poetry run python scripts/probe_relevance_signal.py
 """
@@ -138,7 +138,7 @@ async def main() -> int:
     await store.aclose()
 
     if not rows:
-        print("no rows — is the eval corpus ingested? (scripts/ingest_corpus.py)")
+        print("no rows - is the eval corpus ingested? (scripts/ingest_corpus.py)")
         return 1
 
     print(f"{len(rows)} questions "

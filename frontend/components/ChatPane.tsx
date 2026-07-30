@@ -10,7 +10,7 @@
  *   rendered where the claim is, not collected into a footnote list. Adjacent
  *   markers (`[1][2]`) fall out of the same pass.
  * - **Abstain is not an error.** The pipeline refusing to answer from weak
- *   retrieval is the system working — it is presented calmly, and it names what
+ *   retrieval is the system working - it is presented calmly, and it names what
  *   was actually searched so the user can judge whether to rephrase or upload
  *   something. Styling it red would teach people to read honesty as breakage.
  * - **Degradations survive the turn.** The banner is attached to the committed
@@ -18,10 +18,21 @@
  *   this particular answer took a fallback (I1).
  */
 
-import { CircleAlert, Copy, Send, SearchX, Square } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ArrowDown,
+  ArrowUp,
+  CircleAlert,
+  Copy,
+  MessageSquare,
+  RotateCcw,
+  SearchX,
+  Square,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -37,10 +48,30 @@ import {
   type AbstainInfo,
   type ChatStreamError,
 } from "@/hooks/useChatStream";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useSessionToken } from "@/hooks/useSessionToken";
 import { api } from "@/lib/api";
+import { fileKind } from "@/lib/fileKind";
+import { conversationsKey } from "@/lib/queryKeys";
 import type { Citation, Degradation, PersistedMessage } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, conversationLabel } from "@/lib/utils";
+
+/**
+ * Coarse (day-granularity) relative time for the Recents list. Deliberately
+ * not minute/hour-precise: a finer-grained clock computed once on the server
+ * and again on the client's first hydration pass is exactly the kind of
+ * value that can disagree between the two and trip a hydration mismatch
+ * (see hooks/useHasMounted.ts) - day-level differences essentially never
+ * flip between a request and the hydration that follows milliseconds later.
+ */
+function formatRelativeDay(dateString: string | null): string {
+  if (!dateString) return "";
+  const created = new Date(dateString);
+  const days = Math.floor((Date.now() - created.getTime()) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return `${days} days ago`;
+}
 
 export interface ChatPaneProps {
   selectedDocIds: string[];
@@ -49,13 +80,16 @@ export interface ChatPaneProps {
    * documents and shows up filed under it. `null` = no workspace context. */
   workspaceId: string | null;
   /**
-   * Which thread this pane shows. `null` means "a fresh, unsaved chat" — the
+   * Which thread this pane shows. `null` means "a fresh, unsaved chat" - the
    * moment the first turn lands, the server mints an id and `onConversationStarted`
    * reports it so the sidebar can list it. A non-null value loads that
    * conversation's history before anything else renders.
    */
   conversationId: string | null;
   onConversationStarted?: (conversationId: string) => void;
+  /** Clicking a past conversation in the empty-state Recents list. Navigation
+   * itself is the page's job (it owns the router), not this pane's. */
+  onOpenConversation?: (conversationId: string) => void;
 }
 
 interface UserTurn {
@@ -72,7 +106,7 @@ interface AssistantTurn {
   degradations: Degradation[];
   abstain: AbstainInfo | null;
   error: ChatStreamError | null;
-  /** True when the user pressed stop — the text above is a partial answer. */
+  /** True when the user pressed stop - the text above is a partial answer. */
   stopped: boolean;
 }
 
@@ -80,7 +114,7 @@ type Turn = UserTurn | AssistantTurn;
 
 /**
  * A reloaded message becomes a turn exactly like a live one does. An abstain
- * has no separate representation once persisted — `abstain_node` writes its
+ * has no separate representation once persisted - `abstain_node` writes its
  * refusal text as the message's own `content`, so it already reads as a plain,
  * honest answer bubble without needing the live-only `AbstainCard` styling.
  */
@@ -106,10 +140,30 @@ type Segment =
   | { kind: "text"; key: string; text: string }
   | { kind: "citation"; key: string; marker: number; citation: Citation };
 
-/** `[12]` — bounded to three digits so `[2024]` in prose is not eaten as a marker. */
+/** `[12]` - bounded to three digits so `[2024]` in prose is not eaten as a marker. */
 const MARKER_RE = /\[(\d{1,3})\]/g;
 /** A marker the stream has only half-delivered: `[`, `[1`, `[12`. */
 const PARTIAL_MARKER_RE = /\[\d{0,3}$/;
+
+/** Composer grows with the draft up to this many pixels, then scrolls internally.
+ *  180px, not 160, so it agrees with the textarea's own `max-h-40` fallback -
+ *  Tailwind's spacing scale is rem-based and the root is 18px, so `40` is
+ *  10rem = 180px here, not the 160 the number would suggest at a 16px root. */
+const COMPOSER_MAX_HEIGHT = 180;
+
+/**
+ * The reading column: every part of the chat is centred and capped at one
+ * measure rather than stretching to the window.
+ *
+ * Chat is a reading surface, and a full-width line of an answer is genuinely
+ * harder to read than a narrow one - at ~1400px the eye loses the start of the
+ * next line on every wrap. 42rem lands near 80 characters at this type size,
+ * which is the usual comfortable measure.
+ *
+ * The *same* class is used for the workspace-home composer and the in-chat
+ * one, so the input does not jump width the moment the first turn lands.
+ */
+const READING_COLUMN = "mx-auto w-full max-w-2xl";
 
 function segmentAnswer(text: string, citations: Citation[]): Segment[] {
   const byMarker = new Map(citations.map((c) => [c.marker, c]));
@@ -169,7 +223,10 @@ function AnswerBody({
   );
 
   return (
-    <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">
+    // Answer prose is the one thing on this screen people read for minutes at
+    // a time, so it gets the largest step and a looser line height than the
+    // surrounding chrome - `text-sm` was sized like a label, not like body text.
+    <div className="whitespace-pre-wrap break-words text-base leading-[1.7] text-zinc-800 dark:text-zinc-100">
       {segments.map((segment) =>
         segment.kind === "text" ? (
           <span key={segment.key}>{segment.text}</span>
@@ -182,8 +239,88 @@ function AnswerBody({
         ),
       )}
       {streaming ? (
-        <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-zinc-500 align-text-bottom dark:bg-zinc-300" />
+        <span className="ml-0.5 inline-block h-[1.1em] w-[2px] animate-pulse bg-zinc-500 align-text-bottom dark:bg-zinc-300" />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The documents an answer actually drew from, deduplicated to one entry per
+ * document - distinct from the inline `[n]` chips, which mark *where in the
+ * prose* a claim came from. This is the "what did you search" summary shown
+ * once at the end, the reference's artifact card translated to this product's
+ * own unit: not a generated file, a cited source. Clicking a card reuses the
+ * same `onCitationClick` path as an inline chip, so it opens the exact cited
+ * span, not just the document.
+ */
+function SourcesFooter({
+  citations,
+  onCitationClick,
+}: {
+  citations: Citation[];
+  onCitationClick: (citation: Citation) => void;
+}) {
+  const unique = useMemo(() => {
+    const seen = new Set<string>();
+    const list: Citation[] = [];
+    for (const citation of citations) {
+      if (seen.has(citation.doc_id)) continue;
+      seen.add(citation.doc_id);
+      list.push(citation);
+    }
+    return list;
+  }, [citations]);
+
+  if (unique.length === 0) return null;
+
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        Sources
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {unique.map((citation) => {
+          const kind = fileKind(citation.filename, "");
+          const location = citation.page
+            ? `page ${citation.page}`
+            : citation.section;
+          return (
+            <button
+              key={citation.doc_id}
+              type="button"
+              onClick={() => onCitationClick(citation)}
+              // `dark:bg-zinc-950` (#1a1a1a), matching the panel behind it
+              // rather than sitting a step lighter: in the reference these
+              // end-of-answer source cards read as *outlined* on the chat
+              // background, not as raised tiles (the raised, lighter #2c2c2c
+              // treatment belongs to the artifacts-panel rows). Hover lifts
+              // one step to z900 so the card is still clearly interactive.
+              className="flex w-full max-w-sm items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 text-left shadow-sm hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900"
+            >
+              <span
+                className={cn(
+                  "flex size-10 shrink-0 items-center justify-center rounded-lg",
+                  kind.swatchClassName,
+                )}
+              >
+                <kind.Icon className="size-5" aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1">
+                {/* dark:text-zinc-100, not -50 - see DocumentManager's
+                    DocumentRow for why: `z50` stays dark in dark mode. */}
+                <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  {citation.filename}
+                </span>
+                <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400">
+                  {kind.label}
+                  {location ? ` · ${location}` : ""}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -199,7 +336,9 @@ function AbstainCard({ abstain }: { abstain: AbstainInfo }) {
           className="mt-px size-4 shrink-0 text-zinc-500 dark:text-zinc-400"
           aria-hidden
         />
-        <div className="min-w-0 flex-1 text-sm">
+        {/* An abstain *is* the answer for this turn, so it is set at answer
+            size like one - only its metadata lines stay small. */}
+        <div className="min-w-0 flex-1 text-base leading-[1.6]">
           <p className="font-medium text-zinc-800 dark:text-zinc-100">
             Nothing in your documents supports an answer to this.
           </p>
@@ -288,11 +427,70 @@ function ErrorCard({ error }: { error: ChatStreamError }) {
 // ------------------------------------------------------------------ bubbles
 
 function UserBubble({ content }: { content: string }) {
+  const { copied, copy } = useCopyToClipboard();
   return (
-    <div className="flex justify-end">
-      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent-100 px-3.5 py-2 text-sm text-zinc-900 shadow-sm dark:bg-accent-950/50 dark:text-zinc-100">
+    <div className="group flex flex-col items-end">
+      {/* zinc-100 is only ~2 RGB units off the page's own zinc-50 in light
+          mode (#fbfbf9 vs #fcfcfb, both tuned to sit near-invisibly close to
+          each other as *surface* steps) - a bubble in that colour reads as
+          no bubble at all. zinc-200 (#f0f0ee) is the nearest step with real
+          contrast against the page. */}
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-3xl bg-zinc-200 px-5 py-3 text-base leading-[1.6] text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100">
         {content}
       </div>
+      <button
+        type="button"
+        onClick={() => void copy(content)}
+        aria-label="Copy message"
+        className="mt-1 flex items-center gap-1 rounded p-1 text-xs text-zinc-400 opacity-0 transition-opacity hover:bg-zinc-100 hover:text-zinc-700 group-hover:opacity-100 group-focus-within:opacity-100 dark:text-zinc-500 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+      >
+        <Copy className="size-3" aria-hidden />
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Copy/Retry, hover-revealed. Retry is offered on every committed turn -
+ * answered, errored, abstained, or stopped - since resubmitting makes sense
+ * in all four, and a failed turn is arguably where it matters most. It is a
+ * client-side-only "replace this turn" illusion: the backend has no message-
+ * supersession concept, so `POST /chat` always inserts new rows, and
+ * reloading this conversation (`GET /conversations/{id}`) will show the full,
+ * honest history - original question/answer *and* the retried one, not one
+ * replacing the other. Real supersession would be separate backend work.
+ */
+function MessageToolbar({
+  content,
+  onRetry,
+}: {
+  content: string;
+  onRetry: () => void;
+}) {
+  const { copied, copy } = useCopyToClipboard();
+  return (
+    <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      {content ? (
+        <button
+          type="button"
+          onClick={() => void copy(content)}
+          aria-label="Copy answer"
+          className="flex items-center gap-1 rounded p-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-500 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+        >
+          <Copy className="size-3" aria-hidden />
+          {copied ? "Copied" : "Copy"}
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={onRetry}
+        aria-label="Retry"
+        className="flex items-center gap-1 rounded p-1 text-xs text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-500 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+      >
+        <RotateCcw className="size-3" aria-hidden />
+        Retry
+      </button>
     </div>
   );
 }
@@ -300,12 +498,17 @@ function UserBubble({ content }: { content: string }) {
 function AssistantBubble({
   turn,
   onCitationClick,
+  onRetry,
 }: {
   turn: AssistantTurn;
   onCitationClick: (citation: Citation) => void;
+  onRetry: () => void;
 }) {
   return (
-    <div className="max-w-[95%] space-y-2">
+    // Full column width, not 95% of it: the column itself is now the measure
+    // (see READING_COLUMN), so an extra inset here only produced an
+    // asymmetric right margin that made answers look off-centre.
+    <div className="group w-full space-y-2">
       {turn.degradations.length > 0 ? (
         <DegradationBanner degradations={turn.degradations} />
       ) : null}
@@ -314,7 +517,7 @@ function AssistantBubble({
       {turn.abstain ? <AbstainCard abstain={turn.abstain} /> : null}
 
       {turn.content ? (
-        <div className="rounded-2xl rounded-bl-sm border border-zinc-200 bg-white px-3.5 py-2.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <div>
           <AnswerBody
             text={turn.content}
             citations={turn.citations}
@@ -323,11 +526,67 @@ function AssistantBubble({
           />
           {turn.stopped ? (
             <p className="mt-2 text-xs italic text-zinc-500 dark:text-zinc-400">
-              Stopped — this answer is partial.
+              Stopped. This answer is partial.
             </p>
           ) : null}
         </div>
       ) : null}
+
+      <SourcesFooter citations={turn.citations} onCitationClick={onCitationClick} />
+
+      <MessageToolbar content={turn.content} onRetry={onRetry} />
+    </div>
+  );
+}
+
+// -------------------------------------------------------- workspace recents
+
+/**
+ * The workspace-home "Recents" list - the chats inside this workspace, shown
+ * once composer + this list replace the message area entirely (no
+ * conversation selected yet). Reuses the exact query key the sidebar's own
+ * expanded-row conversation list uses, so opening this costs nothing extra
+ * once the sidebar has already fetched it (and vice versa).
+ */
+function WorkspaceRecents({
+  workspaceId,
+  onOpen,
+}: {
+  workspaceId: string;
+  onOpen: (conversationId: string) => void;
+}) {
+  const getToken = useSessionToken();
+  const conversationsQuery = useQuery({
+    queryKey: conversationsKey(workspaceId),
+    queryFn: async () => api.listConversations(workspaceId, await getToken()),
+  });
+
+  const conversations = conversationsQuery.data ?? [];
+  if (conversations.length === 0) return null;
+
+  return (
+    <div className="mt-8 w-full text-left">
+      <p className="px-1 pb-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        Recents
+      </p>
+      <div className="space-y-0.5">
+        {conversations.map((conversation) => (
+          <button
+            key={conversation.id}
+            type="button"
+            onClick={() => onOpen(conversation.id)}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
+          >
+            <MessageSquare className="size-3.5 shrink-0 text-zinc-400 dark:text-zinc-500" aria-hidden />
+            <span className="min-w-0 flex-1 truncate font-medium text-zinc-800 dark:text-zinc-100">
+              {conversationLabel(conversation)}
+            </span>
+            <span className="shrink-0 text-xs text-zinc-400 dark:text-zinc-500">
+              {formatRelativeDay(conversation.created_at)}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -340,24 +599,36 @@ export function ChatPane({
   workspaceId,
   conversationId,
   onConversationStarted,
+  onOpenConversation,
 }: ChatPaneProps) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showTrace, setShowTrace] = useState(false);
-  /**
-   * doc_id → filename, learned from `retrieval.result`. The scope line only
-   * receives ids, and this pane deliberately does not fetch the document list
-   * itself — that is the document manager's data, and duplicating the query
-   * here would mean two components racing to own the same cache key.
-   */
-
 
   const turnCounter = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const getToken = useSessionToken();
+
+  // Grows with the draft instead of offering a manual drag handle - height is
+  // measured off `scrollHeight` on every keystroke and capped at
+  // `COMPOSER_MAX_HEIGHT`, past which the textarea's own `overflow-y-auto`
+  // takes over rather than the box continuing to grow. Collapsed to "0px"
+  // (not "auto") before measuring: once the box has scrolled internally at
+  // max height, resetting to "auto" can still report the pre-shrink
+  // `scrollHeight` on the next character deleted, so the box never shrinks
+  // back down - collapsing all the way first forces a real remeasure. A
+  // layout effect, not a plain effect, so the resize lands before the browser
+  // paints rather than one frame late.
+  useLayoutEffect(() => {
+    const node = textareaRef.current;
+    if (!node) return;
+    node.style.height = "0px";
+    node.style.height = `${Math.min(node.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  }, [draft]);
 
   const {
     send,
@@ -372,7 +643,7 @@ export function ChatPane({
     conversationId: liveConversationId,
   } = useChatStream({ selectedDocIds, workspaceId, conversationId });
 
-  // The server only mints an id on a brand-new conversation's first turn — the
+  // The server only mints an id on a brand-new conversation's first turn - the
   // sidebar has nothing to list or highlight until this fires.
   const reportedRef = useRef<string | null>(null);
   useEffect(() => {
@@ -383,7 +654,7 @@ export function ChatPane({
 
   /**
    * Reset the visible turn list the instant `conversationId` changes, during
-   * render rather than in an effect — the pattern React's own docs recommend
+   * render rather than in an effect - the pattern React's own docs recommend
    * for "adjust state when a prop changes" ("You Might Not Need an Effect"),
    * and the only one that satisfies `react-hooks/set-state-in-effect`: that
    * rule exists because a synchronous reset inside an effect runs one paint
@@ -394,22 +665,32 @@ export function ChatPane({
    * highlight it in the sidebar), and without this comparison that echo would
    * look identical to "the user switched conversations" and wipe the very
    * turns that streamed the id into existence.
+   *
+   * That echo comparison only makes sense for a *non-null* id, though - you
+   * cannot "echo" into starting a new chat. `liveConversationId` is `null`
+   * until this pane's own hook actually mints one, which never happens for a
+   * conversation that was only ever loaded from history (opened, not typed
+   * into) - so navigating from such a conversation to "New chat" produces
+   * `conversationId === null === liveConversationId` by pure coincidence, not
+   * an echo, and without the explicit null check below that coincidence was
+   * read as "nothing changed," leaving the old conversation's turns on
+   * screen after the sidebar's New chat button had already navigated away.
    */
   const [historyForId, setHistoryForId] = useState(conversationId);
   if (conversationId !== historyForId) {
     setHistoryForId(conversationId);
-    if (conversationId !== liveConversationId) {
+    if (conversationId === null || conversationId !== liveConversationId) {
       setTurns([]);
       setLoadingHistory(conversationId !== null);
     }
   }
 
-  // The genuine side effects of a real switch — aborting whatever the live
+  // The genuine side effects of a real switch - aborting whatever the live
   // stream hook was doing, and fetching the newly-selected conversation's
-  // history — stay in an effect. Guarded the same way as the render-time
+  // history - stay in an effect. Guarded the same way as the render-time
   // reset above, so the self-authored echo does not abort its own stream.
   useEffect(() => {
-    if (conversationId === liveConversationId) return;
+    if (conversationId !== null && conversationId === liveConversationId) return;
     reset();
     if (!conversationId) return;
 
@@ -422,7 +703,7 @@ export function ChatPane({
         setTurns(detail.messages.map(messageToTurn));
       } catch {
         // The conversation may since have been deleted, or the fetch may have
-        // raced a slow network — either way, an empty pane is the honest
+        // raced a slow network - either way, an empty pane is the honest
         // fallback rather than a crash.
         if (!cancelled) setTurns([]);
       } finally {
@@ -435,25 +716,16 @@ export function ChatPane({
     };
   }, [conversationId, liveConversationId, getToken, reset]);
 
-  // Derived, not synced. Filenames are a pure function of the retrieval events
-  // already in state, so mirroring them into their own state via an effect would
-  // add a render pass and a second source of truth for no gain.
-  const docNames = useMemo(() => {
-    const names: Record<string, string> = {};
-    for (const record of retrieval) {
-      for (const doc of record.documents) names[doc.doc_id] = doc.filename;
-    }
-    return names;
-  }, [retrieval]);
-
   // Follow the stream, but stop following the moment the user scrolls up to
-  // re-read something — yanking them back to the bottom mid-sentence is worse
+  // re-read something - yanking them back to the bottom mid-sentence is worse
   // than losing sight of the newest token.
   const onScroll = useCallback(() => {
     const node = scrollRef.current;
     if (!node) return;
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
-    stickToBottom.current = distance < 64;
+    const atBottom = distance < 64;
+    stickToBottom.current = atBottom;
+    setShowScrollToBottom(!atBottom);
   }, []);
 
   useEffect(() => {
@@ -461,6 +733,97 @@ export function ChatPane({
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [turns, answer, stages, degradations]);
+
+  const scrollToBottom = useCallback(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+    stickToBottom.current = true;
+    setShowScrollToBottom(false);
+  }, []);
+
+  /**
+   * Shared by a fresh send and a retry - `replaceTurnId` absent appends a new
+   * assistant turn (today's only path, before retry existed); present, it
+   * splices the result into that existing slot instead. Extracted from what
+   * used to be the tail of `submit()` itself so retry does not re-implement
+   * the same 4-way `result.kind` switch.
+   */
+  const runTurn = useCallback(
+    async (text: string, replaceTurnId?: string) => {
+      const result = await send(text);
+
+      let assistantTurnId = replaceTurnId;
+      if (!assistantTurnId) {
+        turnCounter.current += 1;
+        assistantTurnId = `a${turnCounter.current}`;
+      }
+      const id = assistantTurnId;
+
+      // Commit and clear in one continuation so the live view and the
+      // committed message never both render - React batches these into a
+      // single paint.
+      setTurns((prev) => {
+        const base: AssistantTurn = {
+          id,
+          role: "assistant",
+          content: "",
+          citations: [],
+          degradations: [],
+          abstain: null,
+          error: null,
+          stopped: false,
+        };
+
+        let next: AssistantTurn | null;
+        switch (result.kind) {
+          case "answer":
+            next = {
+              ...base,
+              content: result.answer,
+              citations: result.citations,
+              degradations: result.degradations,
+            };
+            break;
+          case "abstain":
+            next = { ...base, abstain: result.abstain, degradations: result.degradations };
+            break;
+          case "error":
+            next = {
+              ...base,
+              content: result.answer,
+              error: result.error,
+              degradations: result.degradations,
+            };
+            break;
+          case "cancelled":
+            // Nothing arrived before the stop - no empty bubble to show for it,
+            // and nothing to replace a retried turn with either.
+            next =
+              !result.answer && result.degradations.length === 0
+                ? null
+                : {
+                    ...base,
+                    content: result.answer,
+                    degradations: result.degradations,
+                    stopped: true,
+                  };
+            break;
+        }
+
+        if (!next) return prev;
+        if (replaceTurnId) {
+          return prev.map((turn) => (turn.id === replaceTurnId ? next! : turn));
+        }
+        return [...prev, next];
+      });
+      reset();
+      // Sending via the button moves focus to the button; a chat surface should
+      // leave you ready to type the next question, not hunting for the box.
+      textareaRef.current?.focus();
+    },
+    [send, reset],
+  );
 
   const submit = useCallback(async () => {
     const text = draft.trim();
@@ -476,78 +839,37 @@ export function ChatPane({
     setShowTrace(false);
     stickToBottom.current = true;
 
-    const result = await send(text);
+    await runTurn(text);
+  }, [draft, isStreaming, runTurn]);
 
-    turnCounter.current += 1;
-    const assistantTurnId = `a${turnCounter.current}`;
+  // One user turn can precede several assistant turns only in the sense that
+  // each assistant turn has exactly one preceding user turn - walked once per
+  // `turns` change, not recomputed per row.
+  const precedingUserContent = useMemo(() => {
+    const map: Record<string, string> = {};
+    let lastUserContent: string | null = null;
+    for (const turn of turns) {
+      if (turn.role === "user") lastUserContent = turn.content;
+      else if (lastUserContent !== null) map[turn.id] = lastUserContent;
+    }
+    return map;
+  }, [turns]);
 
-    // Commit and clear in one continuation so the live view and the committed
-    // message never both render — React batches these into a single paint.
-    setTurns((prev) => {
-      const base: AssistantTurn = {
-        id: assistantTurnId,
-        role: "assistant",
-        content: "",
-        citations: [],
-        degradations: [],
-        abstain: null,
-        error: null,
-        stopped: false,
-      };
-
-      switch (result.kind) {
-        case "answer":
-          return [
-            ...prev,
-            {
-              ...base,
-              content: result.answer,
-              citations: result.citations,
-              degradations: result.degradations,
-            },
-          ];
-        case "abstain":
-          return [
-            ...prev,
-            {
-              ...base,
-              abstain: result.abstain,
-              degradations: result.degradations,
-            },
-          ];
-        case "error":
-          return [
-            ...prev,
-            {
-              ...base,
-              content: result.answer,
-              error: result.error,
-              degradations: result.degradations,
-            },
-          ];
-        case "cancelled":
-          // Nothing arrived before the stop — no empty bubble to show for it.
-          if (!result.answer && result.degradations.length === 0) return prev;
-          return [
-            ...prev,
-            {
-              ...base,
-              content: result.answer,
-              degradations: result.degradations,
-              stopped: true,
-            },
-          ];
-      }
-    });
-    reset();
-    // Sending via the button moves focus to the button; a chat surface should
-    // leave you ready to type the next question, not hunting for the box.
-    textareaRef.current?.focus();
-  }, [draft, isStreaming, send, reset]);
+  const retry = useCallback(
+    (assistantTurnId: string) => {
+      if (isStreaming) return;
+      const text = precedingUserContent[assistantTurnId];
+      if (!text) return;
+      setShowTrace(false);
+      stickToBottom.current = true;
+      void runTurn(text, assistantTurnId);
+    },
+    [isStreaming, precedingUserContent, runTurn],
+  );
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      // Enter sends; Shift+Enter is a newline. IME composition must not send —
+      // Enter sends; Shift+Enter is a newline. IME composition must not send -
       // committing a candidate with Enter would otherwise fire the turn.
       if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
         event.preventDefault();
@@ -557,153 +879,182 @@ export function ChatPane({
     [submit],
   );
 
-  const scopeNames = useMemo(
-    () => selectedDocIds.map((id) => docNames[id]).filter(Boolean),
-    [selectedDocIds, docNames],
+  const showLiveTurn = isStreaming || answer.length > 0;
+  // The workspace-home state: composer + Recents replace the message area
+  // entirely, matching the reference's project-home screen - there is
+  // nothing to scroll yet, so the scope banner and scroll container (both
+  // about an in-progress or past conversation) don't apply either.
+  const isHome = conversationId === null && turns.length === 0 && !showLiveTurn && !loadingHistory;
+
+  // One pill-shaped card, not a bordered textarea beside a separate labelled
+  // button - the textarea itself carries no border or ring (the card supplies
+  // both, via `focus-within`), and the send/stop control is a circular
+  // icon-only button anchored bottom-right inside the same card. Used
+  // identically for the workspace-home composer and the active-chat one, so
+  // the two never drift into two different chrome treatments of "the input."
+  const composerRow = (
+    <div
+      className={cn(
+        "flex flex-col gap-1.5 rounded-3xl border border-zinc-200 bg-white p-2.5 pl-4 shadow-sm",
+        "focus-within:border-accent-400 dark:border-zinc-700 dark:bg-zinc-900 dark:focus-within:border-accent-500",
+      )}
+    >
+      <textarea
+        ref={textareaRef}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={onKeyDown}
+        rows={1}
+        placeholder="Ask a question about your documents..."
+        aria-label="Message"
+        className={cn(
+          "max-h-40 min-h-[1.75rem] w-full resize-none overflow-y-auto bg-transparent py-1 text-base",
+          "text-zinc-900 placeholder:text-zinc-400 focus-visible:outline-none",
+          "dark:text-zinc-100 dark:placeholder:text-zinc-500",
+        )}
+      />
+
+      <div className="flex items-center justify-end">
+        {isStreaming ? (
+          <Button
+            variant="default"
+            size="icon"
+            onClick={cancel}
+            aria-label="Stop generating"
+            className="rounded-full"
+          >
+            <Square className="size-3 fill-current" aria-hidden />
+          </Button>
+        ) : (
+          <Button
+            variant="accent"
+            size="icon"
+            onClick={() => void submit()}
+            disabled={draft.trim().length === 0}
+            aria-label="Send message"
+            className="rounded-full"
+          >
+            <ArrowUp className="size-4" aria-hidden />
+          </Button>
+        )}
+      </div>
+    </div>
   );
 
-  const showLiveTurn = isStreaming || answer.length > 0;
-
-  return (
-    <section className="flex h-full min-h-0 flex-col">
-      {/* Scope is stated up front: an answer drawn from 2 of 40 documents is a
-          different claim from one drawn from all of them. */}
-      {selectedDocIds.length > 0 ? (
-        <div
-          className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300"
-          title={scopeNames.length > 0 ? scopeNames.join("\n") : undefined}
-        >
-          <span className="font-medium">Searching {selectedDocIds.length}</span>{" "}
-          {selectedDocIds.length === 1 ? "document" : "documents"}
-          {scopeNames.length > 0 ? (
-            <span className="text-zinc-500 dark:text-zinc-400">
-              {" · "}
-              {scopeNames.slice(0, 3).join(", ")}
-              {scopeNames.length > 3 ? ` +${scopeNames.length - 3} more` : ""}
-            </span>
+  if (isHome) {
+    return (
+      <section className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-10">
+        <div className={READING_COLUMN}>
+          {composerRow}
+          {workspaceId && onOpenConversation ? (
+            <WorkspaceRecents workspaceId={workspaceId} onOpen={onOpenConversation} />
           ) : null}
         </div>
-      ) : (
-        <div className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
-          Searching all of your ready documents.
-        </div>
-      )}
+      </section>
+    );
+  }
 
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4"
-      >
-        {turns.length === 0 && !showLiveTurn ? (
-          <div className="mx-auto mt-10 max-w-md text-center text-sm text-zinc-500 dark:text-zinc-400">
-            <p className="font-medium text-zinc-700 dark:text-zinc-200">
-              Ask something about your documents.
-            </p>
-            <p className="mt-1.5">
-              Answers cite the passage they came from. Click a citation to jump
-              to it in the source.
-            </p>
-          </div>
-        ) : null}
-
-        {loadingHistory ? (
-          <p className="shimmer-text text-sm font-medium">
-            Loading conversation…
-          </p>
-        ) : null}
-
-        {turns.map((turn) =>
-          turn.role === "user" ? (
-            <UserBubble key={turn.id} content={turn.content} />
-          ) : (
-            <AssistantBubble
-              key={turn.id}
-              turn={turn}
-              onCitationClick={onCitationClick}
-            />
-          ),
-        )}
-
-        {showLiveTurn ? (
-          <div className="max-w-[95%] space-y-2">
-            {/* The shimmer fills the gap before any token has arrived — once the
-                answer starts streaming, the appearing text is itself the signal
-                that something is happening, so the line steps aside rather than
-                shimmering alongside live text. An already-expanded trace stays
-                open, though: a user who asked to see the detail keeps it. */}
-            {isStreaming && answer.length === 0 ? (
-              <PipelineShimmer
-                stages={stages}
-                expanded={showTrace}
-                onToggle={() => setShowTrace((v) => !v)}
-              />
+  return (
+    <section className="flex min-h-0 flex-1 flex-col">
+      {/* No scope ribbon. It used to sit here, stating "Searching N documents"
+          above every conversation on the grounds that an answer drawn from 2 of
+          40 documents is a different claim from one drawn from all of them -
+          but as a permanent full-width band it was chrome on a reading
+          surface, and the same fact is already legible where it is actually
+          set: the documents panel's own selection checkboxes. Per-answer
+          provenance is carried by the citations, which is the stronger signal
+          anyway. */}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="h-full overflow-y-auto px-4 py-6"
+        >
+          {/* The scroller itself stays full-width, so the scrollbar rides the
+              pane's own right edge rather than floating mid-page; only the
+              content inside it is held to the reading column. */}
+          <div className={cn(READING_COLUMN, "space-y-6")}>
+            {loadingHistory ? (
+              <p className="shimmer-text text-sm font-medium">
+                Loading conversation...
+              </p>
             ) : null}
 
-            {isStreaming && showTrace ? (
-              <PipelineIndicator stages={stages} retrieval={retrieval} />
-            ) : null}
-
-            {degradations.length > 0 ? (
-              <DegradationBanner degradations={degradations} />
-            ) : null}
-
-            {answer.length > 0 ? (
-              <div className="rounded-2xl rounded-bl-sm border border-zinc-200 bg-white px-3.5 py-2.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                <AnswerBody
-                  text={answer}
-                  citations={citations}
-                  streaming={isStreaming}
+            {turns.map((turn) =>
+              turn.role === "user" ? (
+                <UserBubble key={turn.id} content={turn.content} />
+              ) : (
+                <AssistantBubble
+                  key={turn.id}
+                  turn={turn}
                   onCitationClick={onCitationClick}
+                  onRetry={() => retry(turn.id)}
                 />
+              ),
+            )}
+
+            {showLiveTurn ? (
+              <div className="w-full space-y-2">
+                {/* The shimmer fills the gap before any token has arrived - once the
+                    answer starts streaming, the appearing text is itself the signal
+                    that something is happening, so the line steps aside rather than
+                    shimmering alongside live text. An already-expanded trace stays
+                    open, though: a user who asked to see the detail keeps it. */}
+                {isStreaming && answer.length === 0 ? (
+                  <PipelineShimmer
+                    stages={stages}
+                    expanded={showTrace}
+                    onToggle={() => setShowTrace((v) => !v)}
+                  />
+                ) : null}
+
+                {isStreaming && showTrace ? (
+                  <PipelineIndicator stages={stages} retrieval={retrieval} />
+                ) : null}
+
+                {degradations.length > 0 ? (
+                  <DegradationBanner degradations={degradations} />
+                ) : null}
+
+                {answer.length > 0 ? (
+                  <AnswerBody
+                    text={answer}
+                    citations={citations}
+                    streaming={isStreaming}
+                    onCitationClick={onCitationClick}
+                  />
+                ) : null}
+
+                {!isStreaming ? (
+                  <SourcesFooter citations={citations} onCitationClick={onCitationClick} />
+                ) : null}
               </div>
             ) : null}
           </div>
+        </div>
+
+        {showScrollToBottom ? (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            aria-label="Scroll to latest message"
+            className="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-md hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            <ArrowDown className="size-4" aria-hidden />
+          </button>
         ) : null}
       </div>
 
-      <div className="border-t border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex items-end gap-2">
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-            rows={1}
-            placeholder="Ask a question about your documents…"
-            aria-label="Message"
-            className={cn(
-              "max-h-40 min-h-[2.5rem] flex-1 resize-y rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm",
-              "text-zinc-900 placeholder:text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
-              "dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500",
-            )}
-          />
-
-          {isStreaming ? (
-            <Button
-              variant="outline"
-              onClick={cancel}
-              aria-label="Stop generating"
-              className="h-10"
-            >
-              <Square className="size-3.5 fill-current" aria-hidden />
-              Stop
-            </Button>
-          ) : (
-            <Button
-              variant="accent"
-              onClick={() => void submit()}
-              disabled={draft.trim().length === 0}
-              aria-label="Send message"
-              className="h-10"
-            >
-              <Send className="size-3.5" aria-hidden />
-              Send
-            </Button>
-          )}
+      {/* No rule and no bar colour of its own: the composer card already reads
+          as a distinct, lifted surface, and a full-width divider under a
+          centred column drew a line the content did not follow. */}
+      <div className="px-4 pb-4 pt-2">
+        <div className={READING_COLUMN}>
+          {composerRow}
+          <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
+            Enter to send · Shift+Enter for a new line
+          </p>
         </div>
-        <p className="mt-1.5 text-[0.7rem] text-zinc-400 dark:text-zinc-500">
-          Enter to send · Shift+Enter for a new line
-        </p>
       </div>
     </section>
   );

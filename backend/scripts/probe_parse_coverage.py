@@ -8,7 +8,7 @@ measured:
 1. Words from different columns that share a y-baseline are joined into one
    line, because a band is cropped at full page width and lines are grouped by
    vertical position alone.
-2. Any text sitting *beside* a table — same vertical range, different column —
+2. Any text sitting *beside* a table - same vertical range, different column -
    is skipped outright, because the band before the table ends at ``table.top``
    and the band after it starts at ``table.bottom``.
 

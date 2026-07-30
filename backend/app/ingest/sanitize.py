@@ -1,8 +1,8 @@
 """G3, ingest half: strip what a human reader cannot see.
 
 Retrieved document text is an untrusted input channel. Users upload arbitrary
-PDFs, and the classic indirect-injection payload — "ignore previous instructions
-and…" — is hidden as white-on-white text, a zero-opacity run, or an HTML comment.
+PDFs, and the classic indirect-injection payload - "ignore previous instructions
+and..." - is hidden as white-on-white text, a zero-opacity run, or an HTML comment.
 It is invisible to the person who uploaded the file and extracted verbatim by the
 chunking pipeline, which is exactly what makes it dangerous: the model treats
 retrieved text as trustworthy because it arrived through the system's own
@@ -15,7 +15,7 @@ layer is complete alone; the blast radius stays small because this application
 gives the model no write tools and no outbound calls.
 
 **Non-fatal by design.** Suspicious content is removed and counted, never
-rejected — a document full of zero-width characters is far more likely to be a
+rejected - a document full of zero-width characters is far more likely to be a
 bad PDF export than an attack, and refusing it would be wrong either way. What
 matters is that the removal is *visible*, which is why every call returns a
 report that is persisted on the Document and surfaced in the document manager.
@@ -44,7 +44,7 @@ _ZERO_WIDTH = (
 _ZERO_WIDTH_RE = re.compile(f"[{_ZERO_WIDTH}]")
 
 # Bidirectional overrides can visually reorder text so that what a reviewer reads
-# is not what a tokenizer consumes — the "Trojan Source" trick. There is no
+# is not what a tokenizer consumes - the "Trojan Source" trick. There is no
 # legitimate reason for these to appear in extracted document prose.
 _BIDI_RE = re.compile("[‪-‮⁦-⁩]")
 

@@ -1,4 +1,4 @@
-"""SSE frame construction — the wire format both sides are built against.
+"""SSE frame construction - the wire format both sides are built against.
 
 Every frame carries a monotonic ``seq`` and an ISO-8601 ``ts`` alongside its
 payload, so a client can order and dedup without trusting arrival order.
@@ -12,7 +12,7 @@ a frozen UI. A comment frame is invisible to ``EventSource``-style parsers and
 costs nothing.
 
 **No resumability.** ``Last-Event-ID`` is not honoured. On disconnect the client
-does not resume the turn — it fetches ``GET /messages/{id}`` for final state.
+does not resume the turn - it fetches ``GET /messages/{id}`` for final state.
 A half-resumed token stream is worse than a refetch: the client would have to
 reconcile a partial answer against a replayed one, and the failure mode is a
 duplicated or truncated paragraph that looks like a model error.
@@ -39,7 +39,7 @@ SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
     # Nginx buffers proxied responses by default, which would hold every frame
-    # until the stream ends — turning a token stream into one late blob.
+    # until the stream ends - turning a token stream into one late blob.
     "X-Accel-Buffering": "no",
 }
 
@@ -72,7 +72,7 @@ async def with_heartbeat(
     """Interleave keepalives into a stream that may go quiet.
 
     The generator is pulled through a task so a slow producer does not also
-    block the heartbeat — which is the entire point, since the quiet periods are
+    block the heartbeat - which is the entire point, since the quiet periods are
     exactly when the client needs proof the connection is alive.
     """
     iterator = source.__aiter__()

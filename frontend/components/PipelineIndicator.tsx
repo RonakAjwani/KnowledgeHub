@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Live view of the LangGraph run: route → rewrite → retrieve → rerank → grade →
+ * Live view of the LangGraph run: route -> rewrite -> retrieve -> rerank -> grade ->
  * generate.
  *
  * Two decisions drive the whole layout:
@@ -9,8 +9,8 @@
  * - **Passes, not nodes.** Stages are grouped by `attempt`, so the corrective
  *   retry renders as a visibly second pass under its own heading. A list keyed
  *   on node alone would overwrite pass 0 with pass 1 and make the single most
- *   interesting thing the pipeline does — noticing its own retrieval was bad and
- *   redoing it — look like nothing happened.
+ *   interesting thing the pipeline does - noticing its own retrieval was bad and
+ *   redoing it - look like nothing happened.
  * - **Expected states read as expected.** `rerank: skipped_decisive` means the
  *   top result was decisive enough that spending a Cohere call was pointless.
  *   That is the system working well, so it is styled as an optimisation. Only
@@ -68,7 +68,7 @@ function describeDetail(
         return { text: "answered from conversation history", tone: "neutral" };
       }
       if (detail.route === "refuse") {
-        return { text: "out of scope — declined", tone: "neutral" };
+        return { text: "out of scope - declined", tone: "neutral" };
       }
       return { text: "searching your documents", tone: "neutral" };
     }
@@ -92,14 +92,14 @@ function describeDetail(
           return { text: `reranked${margin}`, tone: "good" };
         case "skipped_decisive":
           return {
-            text: `skipped — the top result was already decisive${margin}`,
+            text: `skipped - the top result was already decisive${margin}`,
             tone: "good",
           };
         case "cached":
           return { text: "served from the rerank cache", tone: "good" };
         case "failed":
           return {
-            text: "unavailable — ranked by fused score instead",
+            text: "unavailable - ranked by fused score instead",
             tone: "warn",
           };
         default:
@@ -124,14 +124,14 @@ function describeDetail(
           };
         case "retry":
           return {
-            text: ["below threshold — retrying retrieval", relevance]
+            text: ["below threshold - retrying retrieval", relevance]
               .filter(Boolean)
               .join(" · "),
             tone: "warn",
           };
         case "abstain":
           return {
-            text: ["still below threshold — abstaining", relevance]
+            text: ["still below threshold - abstaining", relevance]
               .filter(Boolean)
               .join(" · "),
             tone: "warn",
@@ -156,7 +156,7 @@ const TONE_CLASS: Record<DetailTone, string> = {
  * Which nodes to draw for a pass, in canonical order.
  *
  * Pass 0 projects the full path so the user sees where the run is going, except
- * when `route` short-circuited to `history`/`refuse` — then the retrieval nodes
+ * when `route` short-circuited to `history`/`refuse` - then the retrieval nodes
  * will never fire and drawing them as "pending" would be a lie that never
  * resolves. Later passes only draw what actually arrived, because the retry
  * re-runs a subset.
@@ -183,7 +183,7 @@ function RetrievalSummary({ record }: { record: RetrievalRecord }) {
   return (
     <div className="mt-1 space-y-1">
       <p className="text-zinc-500 dark:text-zinc-400">
-        searching {sourceCount} {sourceCount === 1 ? "source" : "sources"} → found{" "}
+        searching {sourceCount} {sourceCount === 1 ? "source" : "sources"} -> found{" "}
         {record.candidateCount}{" "}
         {record.candidateCount === 1 ? "passage" : "passages"}
       </p>
@@ -194,7 +194,7 @@ function RetrievalSummary({ record }: { record: RetrievalRecord }) {
               <Badge
                 variant="outline"
                 className="max-w-[16rem]"
-                title={`${doc.filename} — ${doc.hits} matching ${doc.hits === 1 ? "passage" : "passages"}`}
+                title={`${doc.filename} - ${doc.hits} matching ${doc.hits === 1 ? "passage" : "passages"}`}
               >
                 <span className="truncate">{doc.filename}</span>
                 <span className="shrink-0 tabular-nums text-zinc-400 dark:text-zinc-500">
@@ -278,19 +278,19 @@ export interface PipelineShimmerProps {
 
 /**
  * One shimmering line naming the current step, in place of a blank gap while
- * the answer is still being assembled — the same shape as Claude's own
- * in-progress indicator ("Searching…", "Thinking…").
+ * the answer is still being assembled - the same shape as Claude's own
+ * in-progress indicator ("Searching...", "Thinking...").
  *
  * `stages` is appended to on a node's *first* sighting and patched in place
  * after that (see the reducer in `useChatStream`), so the last entry is always
- * the most recently introduced node — which, since the pipeline runs each node
+ * the most recently introduced node - which, since the pipeline runs each node
  * strictly after the last, is also the one presently doing something. That
  * makes "read the last element" a correct way to find "what's happening right
  * now" without tracking it separately.
  *
  * This is the default view; `PipelineIndicator`'s full per-node trace is one
  * click away for anyone who wants to see the retry, the margins, the actual
- * relevance score — the shimmer alone answers "is it still working", not "what
+ * relevance score - the shimmer alone answers "is it still working", not "what
  * did it decide", and some readers want the second question too.
  */
 export function PipelineShimmer({
@@ -315,7 +315,7 @@ export function PipelineShimmer({
     >
       <span className="shimmer-text">
         {label}
-        {isRetry ? " — second pass" : ""}…
+        {isRetry ? " - second pass" : ""}...
       </span>
       <ChevronDown
         className={cn(
@@ -348,7 +348,7 @@ export function PipelineIndicator({
         )}
       >
         <Loader2 className="size-3.5 animate-spin" aria-hidden />
-        <span>Starting…</span>
+        <span>Starting...</span>
       </div>
     );
   }

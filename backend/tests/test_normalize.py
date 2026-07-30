@@ -1,7 +1,7 @@
 """The offset safety net.
 
-Everything in this system that a user can see the correctness of — the source-pane
-highlight, citation verification, the eval harness — rests on one property:
+Everything in this system that a user can see the correctness of - the source-pane
+highlight, citation verification, the eval harness - rests on one property:
 
     for every span, text[span.start:span.end] is exactly that block's content.
 

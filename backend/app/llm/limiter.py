@@ -1,9 +1,9 @@
-"""Pacing limiters — two of them, because two ceilings are denominated differently.
+"""Pacing limiters - two of them, because two ceilings are denominated differently.
 
 The reference project has a single RPM limiter, and reusing it for both paths
 would measure the wrong quantity on one of them:
 
-* **Cohere rerank is bounded by requests** — 10 per minute on the trial key. Every
+* **Cohere rerank is bounded by requests** - 10 per minute on the trial key. Every
   call is roughly the same size (top-40 candidates), so counting calls is exactly
   right.
 * **VLM page escalation is bounded by tokens.** Gemini publishes no separate image
@@ -140,6 +140,6 @@ class CircuitBreaker:
         return True
 
     def reset(self) -> None:
-        """Only for tests and process restart — never called on a live 402."""
+        """Only for tests and process restart - never called on a live 402."""
         self._tripped = False
         self._reason = None

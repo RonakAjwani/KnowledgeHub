@@ -2,8 +2,8 @@
 
 The load-bearing assertion is the same one as Phase 1, carried one stage further:
 a chunk's ``char_start``/``char_end`` must still slice its own text out of
-``normalized_text``. That is the whole citation chain — click a marker, resolve a
-chunk, highlight a span — and it is the thing that breaks silently.
+``normalized_text``. That is the whole citation chain - click a marker, resolve a
+chunk, highlight a span - and it is the thing that breaks silently.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def test_labels_are_canonicalised_across_spellings() -> None:
     assert canonical_label("TABLE", "2") == "table 2"
     assert canonical_label("Fig", "3") == "figure 3"
     assert extract_label("Table 2: Quarterly revenue") == "table 2"
-    assert extract_label("Fig. 3 — Architecture") == "figure 3"
+    assert extract_label("Fig. 3 - Architecture") == "figure 3"
     assert extract_label("This mentions Table 2 mid-sentence") is None
 
 
@@ -105,7 +105,7 @@ def test_mentions_resolve_to_real_spans_in_the_document() -> None:
     ref = refs["table 2"]
     assert ref.has_narrative
 
-    # Every returned span must be a real offset into normalized_text — that is
+    # Every returned span must be a real offset into normalized_text - that is
     # what lets a table citation also highlight the paragraph explaining it.
     start, end = ref.mention_spans[0]
     assert doc.text[start:end] == "Revenue reached $8M in Q3, as Table 2 shows."
@@ -255,7 +255,7 @@ def test_table_chunks_carry_the_authors_lead_line() -> None:
 
 def test_table_chunk_offsets_cover_only_the_table_itself() -> None:
     """The lead line is prepended to the embedded text but is not inside the
-    table's span — a citation must highlight the table, not the paragraph."""
+    table's span - a citation must highlight the table, not the paragraph."""
     blocks = [
         Block(text="Table 2: Revenue"),
         Block(text="| q | r |\n| --- | --- |\n| Q3 | 8 |", block_type=BlockType.TABLE),
@@ -322,8 +322,8 @@ def test_parent_window_terminates_when_budget_blocks_growth() -> None:
     section or array edge.
 
     An earlier version alternated sides and broke only at those edges, so when a
-    neighbouring block was too large for the remaining token budget — mid-section,
-    away from both array ends — nothing moved, no break fired, and the token count
+    neighbouring block was too large for the remaining token budget - mid-section,
+    away from both array ends - nothing moved, no break fired, and the token count
     never changed. It spun forever. Short test documents never reached the budget,
     so only a real 40k-character paper surfaced it.
 
@@ -358,14 +358,14 @@ def test_borderless_rescue_needs_a_caption_to_fire() -> None:
 
     Measured over the corpus, running pdfplumber's text strategy unconditionally
     finds 16 tables in a paper containing one, and drops another page from 50
-    detections to 9 — so the rescue is scoped to pages whose own text carries a
+    detections to 9 - so the rescue is scoped to pages whose own text carries a
     table caption *and* where the default detector found nothing. Ordinary prose,
     and a passing mention mid-sentence, must not trigger it.
     """
     from app.ingest.parse import _TABLE_CAPTION_RE
 
-    # Real captions, at line start — these are the author declaring a table.
-    for caption in ("Table 1: Results", "TABLE II  Latency", "Tab. 3 — Sizes"):
+    # Real captions, at line start - these are the author declaring a table.
+    for caption in ("Table 1: Results", "TABLE II  Latency", "Tab. 3 - Sizes"):
         assert _TABLE_CAPTION_RE.search(caption), caption
 
     # A mention inside a sentence is not a caption; matching it would point the
@@ -378,7 +378,7 @@ def test_small_adjacent_blocks_are_packed_not_left_as_fragments() -> None:
     """Splitting alone is half a chunker.
 
     Measured before packing existed: 61% of corpus chunks came in under half the
-    250-token target and 30% were under 25 tokens — headings and one-line
+    250-token target and 30% were under 25 tokens - headings and one-line
     paragraphs each becoming their own chunk, competing for a top-k slot against
     real passages.
     """

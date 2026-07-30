@@ -1,4 +1,4 @@
-"""SQLAlchemy tables — contract §2 (entities) and §7 (persistence).
+"""SQLAlchemy tables - contract §2 (entities) and §7 (persistence).
 
 Two things here are load-bearing beyond ordinary schema design.
 
@@ -8,7 +8,7 @@ optional makes I3 a matter of remembering; a schema where it is on every row and
 every function signature makes forgetting it a type error at the call site.
 
 **``message_citations`` is not a UI join.** It is one row per citation carrying
-rank, fused score, rerank score and verification verdict — which makes it the
+rank, fused score, rerank score and verification verdict - which makes it the
 evaluation dataset and the retrieval trace at the same time. Storing citations as
 a JSON blob on the message would have been less code and would have cost the
 ablation table, the debugging surface, and any query of the form "which chunks do
@@ -54,7 +54,7 @@ class Workspace(Base):
     The point is upload-once: a workspace's documents stay uploaded across
     every chat opened inside it, rather than a user re-attaching files per
     conversation. Modelled as its own table rather than a tag on ``Document``
-    because a conversation also belongs to one — both need the grouping, and a
+    because a conversation also belongs to one - both need the grouping, and a
     workspace can be renamed or deleted independently of either.
     """
 
@@ -79,7 +79,7 @@ class Document(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     # Nullable, not required: a document uploaded before workspaces existed, or
-    # through a path that never sets one, is still a valid document — just not
+    # through a path that never sets one, is still a valid document - just not
     # grouped under anything. I3 is still enforced by user_id regardless.
     workspace_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True
@@ -91,7 +91,7 @@ class Document(Base):
 
     # Contract §2 names this blob_ref. The resolution was Postgres bytea rather
     # than a path, because Render's filesystem is ephemeral and a stored path
-    # would resolve to a missing file within the hour — so the "reference" is the
+    # would resolve to a missing file within the hour - so the "reference" is the
     # bytes. Download-only: no citation, highlight or verification path reads it.
     blob_ref: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
@@ -104,7 +104,7 @@ class Document(Base):
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # What G3 removed, and what the parser recovered. Both are surfaced in the
-    # document manager — a parser that fails loudly is more useful than one that
+    # document manager - a parser that fails loudly is more useful than one that
     # fails convincingly.
     sanitization_report: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     extraction: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -123,11 +123,11 @@ class Document(Base):
         # Idempotency, scoped per user *and* workspace: re-uploading a file
         # returns the existing document rather than duplicating it. Scoped to the
         # workspace, not just the user, because the same PDF can legitimately
-        # belong to two unrelated workspaces — a style guide referenced from two
+        # belong to two unrelated workspaces - a style guide referenced from two
         # different projects should be two rows, not one document silently
         # reparented. Postgres treats each NULL workspace_id as distinct, so
         # documents predating workspaces (workspace_id IS NULL) never collide
-        # with each other here — acceptable, since every upload through the
+        # with each other here - acceptable, since every upload through the
         # current API always supplies one.
         UniqueConstraint(
             "user_id", "workspace_id", "content_sha256", name="uq_documents_user_ws_sha"
@@ -146,7 +146,7 @@ class Chunk(Base):
 
     __tablename__ = "chunks"
 
-    # sha256(doc_id | chunk_index | text)[:24] — deterministic, so re-ingest is an
+    # sha256(doc_id | chunk_index | text)[:24] - deterministic, so re-ingest is an
     # idempotent upsert rather than a duplicate-vector generator.
     id: Mapped[str] = mapped_column(String(24), primary_key=True)
     doc_id: Mapped[str] = mapped_column(
@@ -155,12 +155,12 @@ class Chunk(Base):
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # CHILD — the retrieval unit. Embedded, indexed, BM25'd.
+    # CHILD - the retrieval unit. Embedded, indexed, BM25'd.
     text: Mapped[str] = mapped_column(Text, nullable=False)
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # PARENT — the generation unit. What the LLM actually receives.
+    # PARENT - the generation unit. What the LLM actually receives.
     parent_text: Mapped[str] = mapped_column(Text, nullable=False)
     parent_char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     parent_char_end: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -171,7 +171,7 @@ class Chunk(Base):
 
     chunk_type: Mapped[str] = mapped_column(String(16), nullable=False, default="prose")
     is_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # [[start, end], ...] — where the document itself discusses this object.
+    # [[start, end], ...] - where the document itself discusses this object.
     related_spans: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
@@ -218,7 +218,7 @@ class Message(Base):
     # Every fallback that engaged on this turn (I1). Persisted rather than only
     # streamed, so a reloaded conversation still shows that an answer was degraded.
     degradations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    # Per-node timings — the latency budget, measured rather than assumed.
+    # Per-node timings - the latency budget, measured rather than assumed.
     latency_ms: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     # Which formulation was used, whether rerank ran, what the grade decided.
@@ -265,7 +265,7 @@ class MessageCitation(Base):
 
 
 class ConversationState(Base):
-    """Rolling summary and entity ledger — updated after each turn, never during.
+    """Rolling summary and entity ledger - updated after each turn, never during.
 
     Deliberately separate from both the document corpus and user preferences.
     Merging any two of the three is how preferences leak into retrieval queries.

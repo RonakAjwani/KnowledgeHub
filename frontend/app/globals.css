@@ -1,25 +1,47 @@
 @import "tailwindcss";
 
+/* `dark:` is gated on an explicit `.dark` class on `<html>`, toggled by
+   `useTheme` (see hooks/useTheme.ts) and persisted to localStorage - not on
+   `prefers-color-scheme`. A media-query default meant every `dark:*` class
+   fired or not based on the OS setting, invisibly to the app; a user whose
+   system was in dark mode got a half-themed page with no way to opt out.
+   Explicit beats implicit here, and it's also what lets light stay the
+   default while dark is opt-in. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+html {
+  font-size: 18px;
+  /* The `<body>` carries the theme background, but the *canvas* behind it
+     doesn't - so an overscroll (rubber-band) past the end of a page painted
+     a white strip in dark mode, since the canvas defaults to white. Two
+     independent fixes, deliberately both: `background` here means the canvas
+     is the right colour even if a browser bounces anyway, and
+     `overscroll-behavior-y: none` stops the bounce from happening at all.
+     This also covers `/login`, whose own tokens are pinned to fixed dark
+     values and so can't rely on the app-theme variable alone. */
+  background: var(--background);
+  overscroll-behavior-y: none;
+}
+
 /**
- * Warm cream-to-charcoal ramp, replacing Tailwind's default zinc/neutral/white/
- * black scales rather than hand-editing every className that already uses them.
+ * Two ramps, fully indirected (all ten steps, `--z50`.."--z950") so light and
+ * dark can genuinely differ at every step rather than sharing "high" literals
+ * - an earlier version shared 600-950 between modes on the theory that
+ * ink-text (light mode's job for those steps) doesn't care about warmth. It
+ * does: light mode's ink was specified as neutral #0B0B0B, not the warm
+ * charcoal dark mode's panels use, so the two roles need independent values
+ * after all. Dark mode's values below are unchanged from what was already
+ * shipped - this only corrects light mode, which had never been given exact
+ * values until now.
  *
- * The existing components (ChatPane, DocumentManager, SourcePane,
- * PipelineIndicator, CitationChip) were written against `zinc-*`/`neutral-*`/
- * `white`/`black` utilities, light and dark variants both. Tailwind v4 resolves
- * every one of those classes from a CSS custom property — `bg-zinc-50` reads
- * `--color-zinc-50` — so redefining the ramp here retints the whole app in one
- * file. The alternative was hand-editing several hundred className strings
- * across ~3000 lines to get the same warm palette the mockups specify, which
- * would only introduce typos and drop a few spots. Status colours (emerald for
- * verified, amber for unsupported/warnings, red for destructive actions) are
- * left as Tailwind's defaults — they carry a specific meaning, not a spot in
- * the neutral scale, and retinting them would blur that meaning.
- *
- * The ramp is symmetric on purpose: low numbers are light (cream), high
- * numbers are dark (charcoal), which is the convention every component already
- * assumes (`bg-zinc-50 dark:bg-zinc-900`, `text-zinc-900 dark:text-zinc-100`).
- * That convention is what lets one ramp serve both modes correctly.
+ * Every step is indirected for the same reason the low steps already were:
+ * `bg-zinc-100` is a light-mode surface colour, `dark:text-zinc-100` is
+ * dark-mode's primary off-white text - one literal cannot serve both, so each
+ * mode gets its own definition of what step "100" means. This is safe only
+ * because no component uses `bg-zinc-50`..`950` *unpaired* - every such
+ * utility in this codebase has a `dark:` sibling in the same className that
+ * wins once `.dark` is active, so a step's light-mode value is simply never
+ * rendered under dark mode.
  */
 @theme inline {
   --color-background: var(--background);
@@ -27,20 +49,20 @@
   --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
 
-  --color-white: #fffdfa;
-  --color-black: #1a1712;
+  --color-white: var(--surface-white);
+  --color-black: var(--surface-black);
 
-  --color-zinc-50: #faf7f2;
-  --color-zinc-100: #f3eee5;
-  --color-zinc-200: #e8e0d2;
-  --color-zinc-300: #d9cdb8;
-  --color-zinc-400: #b7a892;
-  --color-zinc-500: #93856f;
-  --color-zinc-600: #756a58;
-  --color-zinc-700: #5b5245;
-  --color-zinc-800: #423b31;
-  --color-zinc-900: #2b2620;
-  --color-zinc-950: #1c1813;
+  --color-zinc-50: var(--z50);
+  --color-zinc-100: var(--z100);
+  --color-zinc-200: var(--z200);
+  --color-zinc-300: var(--z300);
+  --color-zinc-400: var(--z400);
+  --color-zinc-500: var(--z500);
+  --color-zinc-600: var(--z600);
+  --color-zinc-700: var(--z700);
+  --color-zinc-800: var(--z800);
+  --color-zinc-900: var(--z900);
+  --color-zinc-950: var(--z950);
 
   --color-neutral-50: var(--color-zinc-50);
   --color-neutral-100: var(--color-zinc-100);
@@ -54,30 +76,220 @@
   --color-neutral-900: var(--color-zinc-900);
   --color-neutral-950: var(--color-zinc-950);
 
-  /* Terracotta — the one accent, used deliberately rather than everywhere: the
-     primary action per screen (send, upload, new workspace, sign up), never a
-     background or a body-text colour. */
-  --color-accent-50: #fdf1ea;
-  --color-accent-100: #fbe1d0;
-  --color-accent-200: #f4c2a4;
-  --color-accent-300: #e9a077;
-  --color-accent-400: #dd8a63;
-  --color-accent-500: #cc6b47;
-  --color-accent-600: #b8583a;
-  --color-accent-700: #96452d;
-  --color-accent-950: #3d1d12;
+  /*
+   * SEMANTIC TOKENS - name the *role*, not the step.
+   *
+   * The ramp above answers "which grey is this?"; these answer "what is this
+   * for?", and they are what components should reach for whenever a colour has
+   * a job rather than just a value.
+   *
+   * Two concrete reasons this layer exists, both learned the hard way:
+   *
+   * 1. It removes the `!important` hacks. Writing a primary button as
+   *    `bg-zinc-900 dark:bg-zinc-100` sets up a *descending swap* - a lower
+   *    dark: step overriding a higher base step. Because this project's dark
+   *    variant is `:where()`-based (zero added specificity, deliberately), the
+   *    two utilities tie, and the winner came down to Tailwind's emission
+   *    order, which put the base rule last and broke dark mode. Every
+   *    `dark:bg-zinc-100!` in this codebase was a workaround for that. A single
+   *    `bg-primary` has no pair to tie-break, so the whole class of bug - and
+   *    the `!` - simply does not exist.
+   *
+   * 2. It removes hardcoded hex from components. `dark:hover:bg-[#fffdf9]`
+   *    existed because no ramp step is brighter than `z100`, so the hover
+   *    state had nowhere to point. As a named token it has somewhere to point.
+   */
+  --color-primary: var(--primary);
+  --color-primary-fg: var(--primary-fg);
+  --color-primary-hover: var(--primary-hover);
+  --color-sidebar: var(--sidebar);
+
+  /*
+   * THE ONE SYSTEM HUE: platform blue.
+   *
+   * Named `accent` for continuity with existing call sites, but its job is
+   * narrower than a brand accent. The product is near-monochrome - primary
+   * buttons are ink on cream / off-white on black, and every persistent
+   * surface (panels, sidebars, tiles, selected rows, nav) is neutral. Blue
+   * appears *only* on transient, system-level affordances:
+   *
+   *   - focus rings (keyboard navigation only)
+   *   - the border of a field being actively edited
+   *   - a checked checkbox
+   *   - the highlighted cited passage in the source pane
+   *   - a drag-active dropzone
+   *   - the in-flight pipeline spinner
+   *
+   * Blue specifically, because it is the platform convention: browsers, macOS
+   * and Windows all use it for focus and selection, so it reads instantly as
+   * "the system is pointing at this" rather than as decoration. That is also
+   * why it can coexist with a monochrome palette without competing - none of
+   * it is on screen at rest.
+   *
+   * Semantic colours are separate and unchanged: emerald = verified citation,
+   * amber = AI-derived content, red = error.
+   */
+  --color-accent-50: #eff6ff;
+  --color-accent-100: #dbeafe;
+  --color-accent-200: #bfdbfe;
+  --color-accent-300: #93c5fd;
+  --color-accent-400: #60a5fa;
+  --color-accent-500: #3b82f6;
+  --color-accent-600: #2563eb;
+  --color-accent-700: #1d4ed8;
+  --color-accent-950: #172554;
 }
 
+/*
+ * WARM PAPER / NEUTRAL BLACK - the agreed system.
+ *
+ * This app is for long-form reading, and the two themes have opposite
+ * failure modes.
+ *
+ * In LIGHT, the enemy is glare, and warm off-white ("paper") is measurably
+ * easier to sit with than a clinical grey-white - the same reason e-readers
+ * and writing apps ship cream. So every light step carries a deliberate warm
+ * bias.
+ *
+ * In DARK, the enemy is muddiness, and warmth in the *large surfaces* is what
+ * causes it - a warm near-black is the "dark brown" that was rejected twice.
+ * The resolution is to split it: every dark **surface** (panel, sidebar,
+ * tiles, borders) is perfectly neutral R=G=B, so no large area can read
+ * brown, while the **text** steps carry the warmth. Warmth on a small,
+ * high-contrast element reads as softness rather than mud, and it is what
+ * keeps dark mode feeling like a sibling of the cream light theme instead of
+ * a different product.
+ *
+ * Neither extreme is pure: ink is #24211c, not #000; dark text is #ede9e1,
+ * not #fff. Pure black-on-white is harsh and pure white on near-black haloes.
+ * Softening both ends is the biggest comfort win for sustained reading and
+ * costs nothing in legibility - every text step clears WCAG AA against every
+ * surface it actually lands on, verified programmatically rather than by eye.
+ */
 :root {
+  /* LIGHT - warm paper. Warm bias at every step, by design.
+       z50   main/centre panel (cream)     z400  muted text
+       z100  sidebar, a shade deeper       z500  secondary text
+       z200  subtle fill / user bubble /   z600-z800  progressively stronger
+             selected row                  z900  warm ink (headings, fills)
+       z300  borders
+
+     z400/z500 are derived from their contrast floor against the *worst-case*
+     surface they land on, not interpolated: z400 sits on the z200
+     selected-row fill as well as on the panel, so it is set from that
+     (4.7:1 there, 5.4:1 on the panel). */
+  --z50: #fbfaf7;
+  --z100: #f6f4ef;
+  --z200: #eeebe4;
+  --z300: #e0dcd3;
+  --z400: #6b665d;
+  --z500: #56514a;
+  --z600: #45403a;
+  --z700: #35312c;
+  --z800: #262320;
+  --z900: #24211c;
+  --z950: #14120f;
+  /* The elevated tier: a document tile or the composer, lifted off the cream
+     panel. Very slightly warm rather than pure white, so it reads as lifted
+     paper instead of a hole punched in the page. */
+  --surface-white: #fefdfb;
+  --surface-black: #24211c;
+
+  /* Semantic roles. The primary action is warm ink on cream; hover deepens it
+     toward z700. The sidebar is the z100 tier, named so components don't have
+     to know which step that is. */
+  --primary: #24211c;
+  --primary-fg: #fbfaf7;
+  --primary-hover: #35312c;
+  --sidebar: #f6f4ef;
+
+  /* Focus: platform-blue double ring. `--focus-gap` is the ground colour that
+     punches a 2px gap between the control and the ring, which is what keeps
+     the indicator visible even on top of a filled button. */
+  --focus-ring: #2563eb;
+  --focus-gap: #fbfaf7;
+
+  /* Scrollbar thumb - ink at low alpha rather than a ramp step, so one value
+     works on every surface it can appear over (cream panel, white composer,
+     z100 sidebar) without needing a variant per container. */
+  --scrollbar-thumb: rgb(36 33 28 / 0.22);
+  --scrollbar-thumb-hover: rgb(36 33 28 / 0.4);
+
   --background: var(--color-zinc-50);
   --foreground: var(--color-zinc-900);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: var(--color-zinc-950);
-    --foreground: var(--color-zinc-100);
-  }
+:root.dark {
+  /* DARK - neutral black ground, warm off-white text. Ordered
+     light-to-less-light so `dark:text-zinc-100` is always the brightest text
+     and `dark:text-zinc-500` the most muted.
+
+     THE SPLIT IS THE WHOLE POINT, so do not "tidy" it into one temperature:
+       SURFACES  z950/z900/z800/z700/z600 and z50 -> perfectly neutral R=G=B.
+                 These are the panels, tiles, borders and hover tints, i.e.
+                 all the large areas. Neutral means no large area can ever
+                 read brown, which is the failure mode that was rejected.
+       TEXT      z100/z200/z300/z400/z500 -> only *barely* warm (R-B = 2-3),
+                 enough to avoid the faint blue cast of a pure grey without
+                 being readable as a hue.
+
+     That text warmth used to be +12 (`z100: #ede9e1`), on the theory that a
+     small high-contrast element can carry more tint than a large surface. It
+     cannot, at least not at display sizes: on a `text-2xl font-semibold`
+     workspace title the +12 skew read plainly as brown. Tint is amplified by
+     glyph weight and size, not just by area. +2/+3 survives that test; leave
+     it there.
+
+     TEXT steps are derived from their contrast floor against the worst-case
+     surface each one lands on: z500 -> 4.9:1 on the z900 tiles and 5.5:1 on
+     the panel; z400 -> 6.3:1 on the tiles. The de-warming above holds the
+     green channel (which dominates luminance) roughly constant, so those
+     ratios are preserved rather than re-derived.
+
+     ROLE NOTE: `z900` is *not* "the sidebar" - `dark:bg-zinc-900` /
+     `dark:hover:bg-zinc-900` is the general "lighter tint / hover" utility at
+     ~30 unrelated call sites (nav rows, menu items, buttons). Repointing it at
+     the sidebar's darker value would silently invert every one of those hover
+     states, so the sidebar keeps its own literal in `app/(app)/layout.tsx`. */
+  --z50: #0a0a0a;
+  --z100: #edecea;
+  --z200: #d6d5d3;
+  --z300: #bab9b7;
+  --z400: #9d9c9a;
+  --z500: #8a8987;
+  --z600: #545454;
+  --z700: #3a3a3a;
+  --z800: #262626;
+  --z900: #1b1b1b;
+  --z950: #0f0f0f;
+  /* Elevated surface above the z950 panel - the same value as the tiles. Also
+     what `text-white` resolves to in dark mode, which is why it must stay
+     *dark*: that utility labels the inverted (off-white-filled) buttons. */
+  --surface-white: #1b1b1b;
+  --surface-black: #edecea;
+
+  /* Semantic roles, inverted. `--primary-hover` is an explicit literal rather
+     than a ramp step because it has to be *brighter* than z100, and z100 is
+     already the lightest step - this is exactly the gap the semantic layer
+     exists to fill (see the token comment in `@theme`). The sidebar sits one
+     step deeper than the z950 panel. */
+  --primary: #edecea;
+  --primary-fg: #0f0f0f;
+  --primary-hover: #fbfbfa;
+  --sidebar: #0b0b0b;
+
+  /* Lighter ring on dark ground, and the gap takes the dark panel colour. */
+  --focus-ring: #60a5fa;
+  --focus-gap: #0f0f0f;
+
+  /* Inverted: off-white at low alpha. Neutral rather than warm, for the same
+     reason the dark surfaces are - a scrollbar is a thin sliver, but it runs
+     the full height of a large neutral panel. */
+  --scrollbar-thumb: rgb(240 240 240 / 0.22);
+  --scrollbar-thumb-hover: rgb(240 240 240 / 0.38);
+
+  --background: var(--color-zinc-950);
+  --foreground: var(--color-zinc-100);
 }
 
 body {
@@ -85,7 +297,124 @@ body {
   color: var(--foreground);
 }
 
-/* Shimmer — the pipeline status line while a turn is in flight. A moving
+/*
+ * SCROLLBARS - one global treatment, thin and unpainted at rest.
+ *
+ * The default Windows/Chromium scrollbar is a chunky 17px widget with a white
+ * track and stepper arrows at both ends. On a dark panel that track is a bright
+ * white stripe running the full height of the page, and the arrows are chrome
+ * nothing in this interface uses. It also can't be themed: it is drawn by the
+ * OS, so the app's own light/dark switch has no say in it.
+ *
+ * Two declarations are needed, and they are not redundant:
+ *
+ *   - `color-scheme` is the *only* thing that fixes native widgets we don't
+ *     style at all (Firefox's scrollbars beyond thumb/track colour, select
+ *     dropdowns, date pickers). Setting it per theme means the OS draws its own
+ *     controls in the right mode instead of assuming light.
+ *   - `::-webkit-scrollbar-*` is what gets the Claude-style result in Chromium
+ *     and the Electron-based desktop shells: no stepper buttons, transparent
+ *     track, and a rounded thumb inset from the gutter edge.
+ *
+ * The inset is `border: 2px solid transparent` plus `background-clip:
+ * padding-box` - a transparent border is the standard trick for padding a
+ * scrollbar thumb, since the pseudo-element ignores `padding`. Result: a 10px
+ * hit target (comfortable to grab) carrying a 6px visible sliver.
+ *
+ * Applied globally via `*` rather than to named containers, because every
+ * scrollable surface in the app wants the same thing - the chat scroller, the
+ * source pane, the documents panel, the sidebar, the settings modal - and a
+ * per-component opt-in is exactly the kind of rule new components forget.
+ */
+:root {
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* The stepper arrows, and the little square where a vertical and a horizontal
+   bar meet - both drawn opaque by default, both unwanted here. */
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-corner {
+  display: none;
+  background: transparent;
+}
+
+/*
+ * THE focus indicator - one global rule, not a per-component utility.
+ *
+ * Applied by element selector on purpose. The previous approach spelled
+ * `focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-white
+ * dark:focus-visible:ring-offset-zinc-950` at each call site, which drifted
+ * (some controls had an offset, some didn't, some had no ring at all) and
+ * hardcoded an offset colour that could not follow the theme. A focus
+ * indicator is exactly the kind of thing that must be identical everywhere to
+ * be learnable, and that no new component should be able to forget.
+ *
+ * Shape is a double ring: a 2px gap in the *ground* colour, then a 2px blue
+ * ring. The gap is what keeps the indicator legible when it lands on top of a
+ * filled button, where a single flush outline merges into the fill. Same shape
+ * GitHub's Primer and Radix use, for the same reason.
+ *
+ * `:focus-visible`, never `:focus` - it appears for keyboard navigation and
+ * never on a mouse click, which is what lets a near-monochrome interface carry
+ * a blue affordance while having no hue at all at rest.
+ */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--focus-gap),
+    0 0 0 4px var(--focus-ring);
+  /* The ring is drawn outside the element, so anything with a clipped or
+     overflow-hidden ancestor still needs to paint above its siblings. */
+  position: relative;
+  z-index: 1;
+}
+
+/* Opt-out for controls whose own rounding/overflow makes the outer ring wrong
+   (e.g. a segmented control's inner segments). */
+.focus-ring-none:focus-visible {
+  box-shadow: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Shimmer - the pipeline status line while a turn is in flight. A moving
    highlight sweeps across the text itself (background-clip: text) rather than
    a separate bar, so the status reads as "the system is thinking" instead of a
    generic progress indicator. */
@@ -114,17 +443,18 @@ body {
   animation: shimmer-sweep 2.2s linear infinite;
 }
 
-@media (prefers-color-scheme: dark) {
-  .shimmer-text {
-    background-image: linear-gradient(
-      90deg,
-      var(--color-zinc-600) 0%,
-      var(--color-zinc-600) 40%,
-      var(--color-zinc-200) 50%,
-      var(--color-zinc-600) 60%,
-      var(--color-zinc-600) 100%
-    );
-  }
+/* zinc-800's dark-mode value (#383025) barely lifts off the near-black
+   dark-mode background - swap the sweep highlight to zinc-200, which is
+   light-gray under `.dark`, for actual visible contrast. */
+:root.dark .shimmer-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-zinc-600) 0%,
+    var(--color-zinc-600) 40%,
+    var(--color-zinc-200) 50%,
+    var(--color-zinc-600) 60%,
+    var(--color-zinc-600) 100%
+  );
 }
 
 @media (prefers-reduced-motion: reduce) {

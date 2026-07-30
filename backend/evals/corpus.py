@@ -1,4 +1,4 @@
-"""The declared evaluation corpus — which files are in it, and why each is.
+"""The declared evaluation corpus - which files are in it, and why each is.
 
 Previously the corpus was "whatever is in ``document corpus/``" and the question
 bank referred to documents by free-form strings (``"360ONE"``, ``"TSLA10Q"``)
@@ -6,7 +6,7 @@ that nothing connected to a file. Two consequences, both of which cost a
 session: a question could name a document that was not ingested and simply fail
 as if retrieval were broken, and ``docs_cited`` in the results was an
 eight-character ``doc_id`` prefix nobody could map back to a filename. Declaring
-the corpus here fixes both — the runner resolves ids to keys, and asserts up
+the corpus here fixes both - the runner resolves ids to keys, and asserts up
 front that every question's documents are present.
 
 **Six documents were cut to four**, deliberately. Heterogeneity that large makes
@@ -55,7 +55,7 @@ CORPUS: tuple[CorpusDoc, ...] = (
         "360ONE",
         "360_ONE_MF_July_2026_Regular_b1a10fc55a.pdf",
         "22pp mutual-fund factsheet: ruled tables, dense numerics, and 486 "
-        "chunks — the densest haystack in the corpus, more chunks than the "
+        "chunks - the densest haystack in the corpus, more chunks than the "
         "43-page 10-Q it replaces.",
     ),
     CorpusDoc(
@@ -70,13 +70,13 @@ CORPUS: tuple[CorpusDoc, ...] = (
 EXCLUDED: dict[str, str] = {
     "tsla-20260630.pdf": (
         "TSLA10Q, 43pp. Dropped for iteration cost. Loses: the largest page "
-        "count, and 11 of the corpus's 13 escalation-flagged pages — but those "
+        "count, and 11 of the corpus's 13 escalation-flagged pages - but those "
         "pages were never escalated anyway (Groq exposes no vision model, so "
         "Tier-2 has never run on this corpus at all). Haystack difficulty is "
         "preserved by 360ONE, which has more chunks."
     ),
     "2607.24354v1.pdf": (
-        "CMVF, 9pp. Dropped because it has no topical partner in the corpus — "
+        "CMVF, 9pp. Dropped because it has no topical partner in the corpus - "
         "every CMVF question was single-document, so it added heterogeneity "
         "without adding a retrieval path. Loses: nothing the other three "
         "documents do not also exercise."

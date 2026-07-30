@@ -1,7 +1,7 @@
 """Run a handful of questions end to end and print enough to judge them by eye.
 
 Deliberately not the eval harness. The harness answers "what fraction passed",
-which is the wrong question before anyone has confirmed the system works at all —
+which is the wrong question before anyone has confirmed the system works at all -
 and a pass rate computed over a broken pipeline is a precise number about
 nothing. This prints the whole turn: how the query was decomposed, which
 documents came back, the full answer, and what each citation resolves to.
@@ -44,7 +44,7 @@ from app.retrieval.rerank import Reranker
 EVAL_USER = "eval-user"
 
 # Free tiers meter tokens per *minute*, and six multi-chunk questions fired
-# back to back exhaust that budget in seconds — a throughput limit of the
+# back to back exhaust that budget in seconds - a throughput limit of the
 # harness, not of the product, since a person asks one thing at a time.
 # Pausing between cases keeps the diagnostic measuring the pipeline rather
 # than the rate limiter.
@@ -76,7 +76,7 @@ CASES: list[tuple[str, str, list[str]]] = [
         [],
     ),
     (
-        "not in the corpus — must decline",
+        "not in the corpus - must decline",
         "According to the corpus, what are LangChain's core abstractions such "
         "as Chains, Agents, and Tools?",
         [],

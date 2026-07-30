@@ -1,11 +1,11 @@
-"""``QueryState`` — the one object every node reads and writes.
+"""``QueryState`` - the one object every node reads and writes.
 
 A ``TypedDict`` rather than a Pydantic model because LangGraph merges the partial
 dict a node returns into the running state; a model would be revalidated and
 rebuilt on every node transition for no benefit.
 
 The field worth pausing on is ``attempt``. Invariant I6 caps retrieval at two
-attempts — initial plus one corrective retry — and the cap is enforced **by this
+attempts - initial plus one corrective retry - and the cap is enforced **by this
 counter**, not by asking the model nicely in a prompt. A bounded CRAG loop whose
 bound lives in an instruction is not bounded.
 """
@@ -53,14 +53,14 @@ class QueryState(TypedDict, total=False):
 
     # -- rewriting
     #
-    # `effective_queries` is the list actually retrieved with — one entry for an
+    # `effective_queries` is the list actually retrieved with - one entry for an
     # ordinary question, several when the user asked distinct things in one
     # message ("Who is Ronak? What are his qualifications?"). Retrieving once for
     # a multi-intent message embeds a blend of every intent and tends to surface
     # passages answering only the loudest one.
     #
     # `effective_query` stays a single string for the things that need exactly
-    # one — Cohere's rerank input and the rerank cache key.
+    # one - Cohere's rerank input and the rerank cache key.
     effective_queries: list[str]
     effective_query: str
     rewritten: bool

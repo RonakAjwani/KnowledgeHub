@@ -36,7 +36,9 @@ export function Progress({
     >
       <div
         className={cn(
-          "h-full rounded-full bg-zinc-900 transition-[width] duration-300 ease-out dark:bg-zinc-100",
+          // `bg-primary` resolves per theme, so the filled bar needs no
+          // `dark:` pair (and none of the specificity workarounds it required).
+          "h-full rounded-full bg-primary transition-[width] duration-300 ease-out",
           indeterminate && "animate-pulse",
           barClassName,
         )}

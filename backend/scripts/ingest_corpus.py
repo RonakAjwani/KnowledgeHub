@@ -1,7 +1,7 @@
 """Ingest the evaluation corpus into a named collection.
 
 Separate from the eval runner so ingestion happens once and questions can be
-re-run against it cheaply — VLM escalation on a 43-page 10-Q is minutes of work
+re-run against it cheaply - VLM escalation on a 43-page 10-Q is minutes of work
 and real token spend, and re-paying it on every threshold sweep would make
 tuning unaffordable.
 

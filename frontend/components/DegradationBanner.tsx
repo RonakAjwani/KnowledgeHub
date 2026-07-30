@@ -5,13 +5,13 @@
  *
  * Every fallback the pipeline takes appends a `Degradation` and emits an SSE
  * event, so that a degraded answer is never indistinguishable from a healthy
- * one. This component is the last hop of that guarantee — if it is missing,
+ * one. This component is the last hop of that guarantee - if it is missing,
  * dismissible, or ignorable, the invariant is broken in the only place the user
  * can see it.
  *
  * So: not dismissible, and not styled as an error. The answer above it is real
  * and usable; something in the path fell back to a second-best route and the
- * user is entitled to know which. Amber, not red — red would train people to
+ * user is entitled to know which. Amber, not red - red would train people to
  * read "a fallback ran" as "this answer is broken", and they would start
  * discarding correct answers.
  *
@@ -38,8 +38,8 @@ export interface DegradationBannerProps {
 
 /**
  * Stage-specific copy, keyed `stage:reason`. The consequence for the answer
- * differs by stage even when the reason is identical — a rerank timeout changes
- * result ordering, a verify timeout changes what the citation chips can claim —
+ * differs by stage even when the reason is identical - a rerank timeout changes
+ * result ordering, a verify timeout changes what the citation chips can claim -
  * so the pairs get their own sentences rather than a generic template.
  */
 const SPECIFIC_COPY: Partial<Record<`${DegradationStage}:${DegradationReason}`, string>> = {
@@ -83,13 +83,13 @@ const SPECIFIC_COPY: Partial<Record<`${DegradationStage}:${DegradationReason}`, 
   // Verification is the one stage that fails toward *unknown* rather than
   // toward answering, so the copy has to say what the chips now mean.
   "verify:timeout":
-    "Citation checking did not finish, so citations show as unchecked — not as unsupported.",
+    "Citation checking did not finish, so citations show as unchecked, not as unsupported.",
   "verify:unavailable":
-    "Citation checking could not run, so citations show as unchecked — not as unsupported.",
+    "Citation checking could not run, so citations show as unchecked, not as unsupported.",
   "verify:rate_limited":
-    "Citation checking was rate-limited, so citations show as unchecked — not as unsupported.",
+    "Citation checking was rate-limited, so citations show as unchecked, not as unsupported.",
   "verify:quota_exhausted":
-    "Citation checking is out of quota, so citations show as unchecked — not as unsupported.",
+    "Citation checking is out of quota, so citations show as unchecked, not as unsupported.",
 
   "parse:cap_reached":
     "A document hit its page-escalation cap during ingest; some pages were read with basic text extraction only, so parts of them may be missing here.",
@@ -135,7 +135,7 @@ interface GroupedDegradation {
  * Identical degradations are collapsed with a count rather than dropped.
  *
  * The same fallback firing on both retrieval passes is one fact, not two, but
- * "×2" is still information — it says the retry hit the same wall.
+ * "×2" is still information - it says the retry hit the same wall.
  */
 function group(degradations: Degradation[]): GroupedDegradation[] {
   const groups: GroupedDegradation[] = [];

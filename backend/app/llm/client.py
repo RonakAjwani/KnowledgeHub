@@ -1,11 +1,11 @@
-"""Provider-agnostic LLM adapter — contract §9.
+"""Provider-agnostic LLM adapter - contract §9.
 
 The reference project's client is carried over in shape but not in substance: it
 is text-only and synchronous, and two stages of this design quietly assume it is
 neither.
 
 * **``ImagePart`` is what makes Tier-2 VLM escalation free.** Page escalation is
-  justified on "no new dependency, no GPU, no RAM — it goes through the existing
+  justified on "no new dependency, no GPU, no RAM - it goes through the existing
   LLM adapter", and that only holds if the message type can carry an image. A
   ``list[dict[str, str]]`` signature cannot express one.
 * **``stream()`` is required by the SSE contract.** ``answer.delta`` has no other
@@ -75,8 +75,8 @@ _DEFAULT_RATE_LIMIT_WAIT_S = 2.0
 def _estimate_request_tokens(body: dict[str, Any], max_tokens: int) -> int:
     """What this request will cost against a per-minute allowance.
 
-    Providers meter ``max_tokens`` as *reserved* output — it is spent whether or
-    not the answer uses it — so the cost of a call is the prompt plus the full
+    Providers meter ``max_tokens`` as *reserved* output - it is spent whether or
+    not the answer uses it - so the cost of a call is the prompt plus the full
     reservation, not the prompt plus the answer actually returned. Budgeting on
     the prompt alone under-counts by up to ``max_tokens`` per call, which is
     most of the request at these sizes.
@@ -103,7 +103,7 @@ def _retry_after_seconds(response: httpx.Response) -> float:
 
     Both Gemini and Groq return the advice in ``Retry-After``; Gemini also
     repeats it in the body. Anything unparseable or absurd falls back to a short
-    fixed wait — obeying a header that says 3600 would hang the request far past
+    fixed wait - obeying a header that says 3600 would hang the request far past
     any caller's timeout.
     """
     raw = response.headers.get("retry-after", "")
@@ -115,7 +115,7 @@ def _retry_after_seconds(response: httpx.Response) -> float:
 
 
 class LLMRateLimited(LLMError):
-    """429 — the provider's quota or per-minute cap, not a malformed response.
+    """429 - the provider's quota or per-minute cap, not a malformed response.
 
     Distinguished so a degradation record names the real cause. Gemini's free
     tier is a per-*day* request cap on some models, so this is a routine
@@ -178,7 +178,7 @@ def _to_openai(messages: Sequence[Message]) -> list[dict[str, Any]]:
 def _to_anthropic(
     messages: Sequence[Message],
 ) -> tuple[str | None, list[dict[str, Any]]]:
-    """Split the system prompt out — Anthropic takes it as a top-level field."""
+    """Split the system prompt out - Anthropic takes it as a top-level field."""
     system_chunks: list[str] = []
     out: list[dict[str, Any]] = []
 
@@ -219,12 +219,12 @@ def parse_json_tolerant(text: str, *, list_key: str | None = None) -> dict[str, 
 
     Models wrap JSON in prose or code fences even under explicit instruction not
     to. Every caller of ``complete_json`` is on a fail-open path, so a parse
-    failure means that stage degrades — being strict here converts a cosmetic
+    failure means that stage degrades - being strict here converts a cosmetic
     formatting quirk into a lost rewrite or a lost route decision.
 
     ``list_key`` names the field a **bare top-level array** should be wrapped
     into. Asked for ``{"queries": [...]}``, models routinely answer with just
-    ``[...]`` — which is a correct reading of the request and carries exactly the
+    ``[...]`` - which is a correct reading of the request and carries exactly the
     information wanted, but parsed to a list, failed the dict check, and left the
     brace-scan with no ``{`` to find. Rewrite then degraded to the raw query on
     every multi-part question, silently taking query decomposition with it. When
@@ -289,7 +289,7 @@ class LLMClient:
         """Wait until this request fits inside the model's per-minute budget.
 
         MEASURED: without this, a back-to-back run of the 22-question eval
-        completed **2 of 22** — every other question died as
+        completed **2 of 22** - every other question died as
         ``DependencyUnavailable``. Generation reserves ~6k tokens against a
         12,000 TPM cap, so two calls exhaust the minute; the third 429s and
         falls back to the smaller model, which route and rewrite have already
@@ -299,7 +299,7 @@ class LLMClient:
         Waiting is the correct behaviour rather than a workaround: the request
         is going to be admissible in a few seconds, and a bounded wait is a
         better answer than an error the caller cannot act on. It is also not a
-        degradation — nothing was lost, so no `Degradation` is recorded (I1
+        degradation - nothing was lost, so no `Degradation` is recorded (I1
         governs fallbacks, not pacing).
 
         Unmetered models are not paced. Inventing a ceiling for a provider whose
@@ -388,7 +388,7 @@ class LLMClient:
             if system:
                 body["system"] = system
             # Sending temperature to a current Claude model is a 400, not a
-            # no-op — the parameter was removed, not deprecated.
+            # no-op - the parameter was removed, not deprecated.
             if not model.startswith(_ANTHROPIC_NO_SAMPLING_PREFIXES):
                 body["temperature"] = temperature
             if stream:
@@ -440,7 +440,7 @@ class LLMClient:
         )
 
         cache = get_cache()
-        # Only deterministic calls are cacheable — a temperature above zero is a
+        # Only deterministic calls are cacheable - a temperature above zero is a
         # request for variation, and serving it from cache defeats the point.
         cacheable = use_cache and temperature == 0.0
         cache_key = ""
@@ -477,7 +477,7 @@ class LLMClient:
 
             if response.status_code == 429:
                 # Per-minute token and request caps are a routine condition on
-                # every free tier here, and the largest prompts trip them first —
+                # every free tier here, and the largest prompts trip them first -
                 # so the requests most worth completing are the ones that fail.
                 # One short wait inside the caller's own deadline recovers them
                 # without turning a transient cap into a 503. A cap whose advised
@@ -543,7 +543,7 @@ class LLMClient:
         max_tokens: int = 2048,
         timeout: float = 30.0,
     ) -> AsyncIterator[str]:
-        """Yield text deltas. Never cached — see the module docstring."""
+        """Yield text deltas. Never cached - see the module docstring."""
         model = model or self.settings.llm_model_generate
         path, body = self._body(
             messages,
@@ -561,7 +561,7 @@ class LLMClient:
         # actually matters: every chat turn streams, so protecting only the
         # non-streaming path left the product's one hot route unguarded while
         # the tests looked green. Safe to retry because a 429 is known from the
-        # response status before any delta has been yielded — once text has
+        # response status before any delta has been yielded - once text has
         # reached the caller, re-requesting would duplicate it.
         while True:
             try:

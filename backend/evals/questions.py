@@ -1,4 +1,4 @@
-"""The golden set — curated down from 53 to 22 against the four-document corpus.
+"""The golden set - curated down from 53 to 22 against the four-document corpus.
 
 Two kinds of question, graded differently and deliberately kept apart:
 
@@ -12,7 +12,7 @@ Two kinds of question, graded differently and deliberately kept apart:
 
 The negative controls are what make this set useful for setting the relevance
 floors. Tuning a floor to maximise accuracy on answerable questions alone
-optimises for a system that never refuses — which scores well right up until a
+optimises for a system that never refuses - which scores well right up until a
 reviewer asks something the documents do not cover.
 
 Curation
@@ -28,7 +28,7 @@ testing something.
 
 Grading semantics
 -----------------
-``must_include`` is a **disjunction** — any one substring means the fact is
+``must_include`` is a **disjunction** - any one substring means the fact is
 present, because the model's phrasing is its own. ``must_include_all`` is a
 **conjunction**, and it is what makes "multi-part question" a real test: a
 three-part question graded disjunctively passes when the model answers one third
@@ -54,7 +54,7 @@ class Question:
     text: str
     expect: Expect
     # Any one of these is enough (disjunction). Numeric entries are matched on a
-    # number boundary by the runner, not as raw substrings — "75" must not be
+    # number boundary by the runner, not as raw substrings - "75" must not be
     # satisfied by "175".
     must_include: tuple[str, ...] = ()
     docs: tuple[str, ...] = ()
@@ -63,7 +63,7 @@ class Question:
     must_include_all: tuple[str, ...] = ()
     # The expected value is *computed* from retrieved values, not quoted from
     # the corpus. Tells probe_golden_set.py not to report its absence as a
-    # broken question — for these, absence from the source text is the point.
+    # broken question - for these, absence from the source text is the point.
     derived: bool = False
     # Follow-up turns, for the multi-turn cases.
     follow_ups: tuple[str, ...] = field(default_factory=tuple)
@@ -89,7 +89,7 @@ QUESTIONS: list[Question] = [
     Question("A2", "table",
              "What was the Manufacturing PMI in February 2026?",
              Expect.ANSWER, ("56.9",), ("360ONE",),
-             note="same macro table as E2, but this cell is filled — the pair is "
+             note="same macro table as E2, but this cell is filled - the pair is "
                   "what makes E2's refusal meaningful"),
     Question("A3", "table",
              "What is the Net AUM of the 360 ONE Focused Fund as of June 30, 2026?",
@@ -99,7 +99,7 @@ QUESTIONS: list[Question] = [
              "How many maintenance-specific object properties are in the "
              "OpenAI-generated ontology variant?",
              Expect.ANSWER, ("75",), ("LegalKG",),
-             note="borderless (booktabs) table — the direct test of the fallback "
+             note="borderless (booktabs) table - the direct test of the fallback "
                   "detector added in 2067064"),
 
     # ------------------------------------------------- arithmetic over retrieved values
@@ -120,7 +120,7 @@ QUESTIONS: list[Question] = [
     Question("F2", "paraphrase",
              "Summarize what langchain.md is actually about.",
              Expect.ANSWER, ("navigation", "docs.json", "Mintlify"), ("langchain",),
-             note="filename trap in the positive direction — must not refuse a file "
+             note="filename trap in the positive direction - must not refuse a file "
                   "it can perfectly well describe"),
 
     # ------------------------------------------------- multi-part (conjunctive)
@@ -129,7 +129,7 @@ QUESTIONS: list[Question] = [
              "for SDK reference generation?",
              Expect.ANSWER, docs=("langchain",),
              must_include_all=("typedoc", "docfx", "javadoc"),
-             note="three values, all in one enum — a partial answer is a failure"),
+             note="three values, all in one enum - a partial answer is a failure"),
     Question("I6", "multipart",
              "How many inconsistent relation signatures did the qualitative check "
              "find in the OpenAI-fused graph versus the Mistral-fused graph?",
@@ -148,7 +148,7 @@ QUESTIONS: list[Question] = [
              Expect.ANSWER, docs=("MathModDB", "LegalKG"),
              must_include_all=("229", "0.7"),
              note="ADDED. Two unrelated intents in one message, answers in two "
-                  "different documents — the case interleave_intents exists for, "
+                  "different documents - the case interleave_intents exists for, "
                   "and the corpus had no genuinely multi-intent cross-document "
                   "question before this one"),
 
@@ -184,7 +184,7 @@ QUESTIONS: list[Question] = [
              follow_ups=("Who manages it?",)),
 
     # ================================================================
-    # NEGATIVE CONTROLS — the correct answer is a refusal.
+    # NEGATIVE CONTROLS - the correct answer is a refusal.
     # ================================================================
     Question("E1", "decline",
              "What was the 360 ONE Focused Fund's AUM exactly one year ago, in "
@@ -194,7 +194,7 @@ QUESTIONS: list[Question] = [
     Question("E2", "decline",
              "What was India's two-wheeler sales YoY growth in June 2026?",
              Expect.DECLINE, docs=("360ONE",),
-             note="hardest control — the row exists and the system reads that table "
+             note="hardest control - the row exists and the system reads that table "
                   "correctly (A2), but this cell is blank"),
     Question("E6", "decline",
              "What F1 score did the LLM-based relation extraction achieve in the "
@@ -210,7 +210,7 @@ QUESTIONS: list[Question] = [
              "What two dates bound the export-control suspension and restoration of "
              "Anthropic's Fable and Mythos models?",
              Expect.DECLINE,
-             note="zero-relevance control — nothing in the corpus touches this"),
+             note="zero-relevance control - nothing in the corpus touches this"),
 ]
 
 
@@ -218,15 +218,15 @@ QUESTIONS: list[Question] = [
 # testing something is worse than a large one.
 DROPPED: dict[str, str] = {
     # --- went with the two dropped documents (evals.corpus.EXCLUDED)
-    "A4, A5, I1, E3, E4, K1, L2": "CMVF questions — document dropped.",
-    "A9, A10, B4, B5, B8, I3, I4, J4, K3, E8, E9": "TSLA 10-Q questions — document dropped.",
+    "A4, A5, I1, E3, E4, K1, L2": "CMVF questions - document dropped.",
+    "A9, A10, B4, B5, B8, I3, I4, J4, K3, E8, E9": "TSLA 10-Q questions - document dropped.",
     # --- cut as redundant, documents retained
     "A7": "MathModDB R@10 table lookup. Table-cell lookup is covered by A2, A3 "
           "and A8, and A8 is the more informative one (it is the borderless case).",
     "I5": "LegalKG 0.7 similarity threshold. Absorbed into D6, which asks for the "
           "same fact as one half of a two-intent question.",
     "I2": 'Vedanta line-item count. must_include was ("three", "3") and "3" '
-          "matches almost any answer containing a digit — the question could not "
+          "matches almost any answer containing a digit - the question could not "
           "fail, so it measured nothing.",
     "B1": "Net FPI flow change. The question supplies no operands and the expected "
           "substrings were the two endpoints rather than the delta, so a verbatim "

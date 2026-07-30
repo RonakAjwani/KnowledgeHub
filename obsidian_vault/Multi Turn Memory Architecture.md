@@ -4,9 +4,9 @@ The largest genuinely-new component in KnowledgeHub. [[NotebookRAG Reference Pro
 
 ## The failure this solves
 
-Embedding the raw follow-up turn is the default mistake. `"what about the second one?"` has no retrievable semantic content. Roughly **60% of follow-up messages carry unresolved coreferences** — this is why SemEval-2026 Task 8 exists as a shared task.
+Embedding the raw follow-up turn is the default mistake. `"what about the second one?"` has no retrievable semantic content. Roughly **60% of follow-up messages carry unresolved coreferences** - this is why SemEval-2026 Task 8 exists as a shared task.
 
-## Three separate memory stores — do not merge
+## Three separate memory stores - do not merge
 
 | Store | Location | Scope | Purpose |
 |---|---|---|---|
@@ -16,7 +16,7 @@ Embedding the raw follow-up turn is the default mistake. `"what about the second
 
 User preferences must **never** leak into retrieval queries. Keeping them separate is an explicit architecture decision worth stating in the README.
 
-## Query rewriting — with a hybrid-specific constraint
+## Query rewriting - with a hybrid-specific constraint
 
 Rewrite each turn into a standalone query using recent history, before retrieval. Standard. But the rewrite feeds **both** retrieval branches, so:
 
@@ -32,9 +32,9 @@ Second benefit is architectural: the rewrite is a serial LLM call on the critica
 
 ## Long conversations
 
-- **Last N turns verbatim** (N ≈ 4–6)
+- **Last N turns verbatim** (N ≈ 4-6)
 - **Rolling summary** of everything older
-- **Entity/fact ledger** — small structured list of entities and facts established in the conversation
+- **Entity/fact ledger** - small structured list of entities and facts established in the conversation
 
 The entity ledger does double duty: it is both conversational memory *and* the substitution source for coreference resolution during query rewriting. One structure, two jobs.
 

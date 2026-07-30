@@ -12,21 +12,20 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CircleCheck,
-  FileText,
-  Info,
+  Download,
   LoaderCircle,
-  RefreshCw,
-  ScanText,
   ShieldAlert,
-  Table2,
   Trash2,
   TriangleAlert,
   Upload,
-  WandSparkles,
+  X,
 } from "lucide-react";
 
+import { useHasMounted } from "@/hooks/useHasMounted";
 import { useSessionToken, type TokenGetter } from "@/hooks/useSessionToken";
-import { API_URL, ApiError, api } from "@/lib/api";
+import { API_URL, ApiError, api, triggerBrowserDownload } from "@/lib/api";
+import { fileKind } from "@/lib/fileKind";
+import { documentsKey } from "@/lib/queryKeys";
 import { streamIngest } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import type {
@@ -43,14 +42,6 @@ import { Progress } from "@/components/ui/progress";
 
 // -------------------------------------------------------------- constants
 
-/**
- * `null` workspace still gets its own cache entry, rather than reusing the
- * pre-workspace key — a stale "everything" list must never appear to satisfy
- * a query for one specific workspace's files, or a delete/upload in one
- * workspace would visibly mutate another's list through a shared cache slot.
- */
-const documentsKey = (workspaceId: string | null) =>
-  ["documents", workspaceId] as const;
 const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown"];
 const TERMINAL_STATUSES: DocumentStatus[] = ["ready", "failed"];
 
@@ -74,7 +65,7 @@ const PIPELINE_STEPS: DocumentStatus[] = [
 // ---------------------------------------------------------------- helpers
 
 /**
- * `extraction` is either the signal or `{}` — an empty object still satisfies
+ * `extraction` is either the signal or `{}` - an empty object still satisfies
  * `in` narrowing because of its index signature, so probe a real field.
  */
 function extractionOf(doc: DocumentSummary): ExtractionSignal | null {
@@ -103,14 +94,6 @@ function extensionOf(filename: string): string {
   return dot === -1 ? "" : filename.slice(dot).toLowerCase();
 }
 
-/**
- * ISO prefix rather than `toLocaleString`: this component pre-renders on the
- * server, and a locale-formatted date is the classic hydration mismatch.
- */
-function formatCreated(created: string | null): string | null {
-  return created ? created.slice(0, 10) : null;
-}
-
 function formatKinds(kinds: Record<string, number>): string {
   return Object.entries(kinds)
     .map(([kind, count]) => `${count} ${kind.replace(/_/g, " ")}`)
@@ -131,7 +114,7 @@ interface LiveState {
 
 export interface DocumentManagerProps {
   /** The workspace whose files this panel shows and uploads into. `null`
-   * means no workspace is open yet — the panel renders an empty placeholder
+   * means no workspace is open yet - the panel renders an empty placeholder
    * and every mutation is disabled, since there is nowhere to attach a file. */
   workspaceId: string | null;
   /** Documents retrieval is restricted to. Empty means "search everything". */
@@ -166,11 +149,24 @@ export function DocumentManager({
     enabled: workspaceId !== null,
   });
 
+  // Forces the server-matching first client paint through the loading branch
+  // even if the query has already resolved by then (a fast localhost fetch
+  // can beat hydration) - see hooks/useHasMounted.ts. Same fix as
+  // WorkspaceSidebar/WorkspaceGrid's identical race, applied here
+  // proactively since this component has the exact same `isPending`-gated
+  // render pattern inside the same server-rendered page.
+  const hasMounted = useHasMounted();
+  const showLoading = !hasMounted || documentsQuery.isPending;
+
   const [live, setLive] = useState<Record<string, LiveState>>({});
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const [uploadingNames, setUploadingNames] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  const [downloadAllErrors, setDownloadAllErrors] = useState<string[]>([]);
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const [bulkDeleteErrors, setBulkDeleteErrors] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Drag events fire on every child; a depth counter keeps the drop zone from
@@ -243,7 +239,7 @@ export function DocumentManager({
             }
             // Exactly one terminal event arrives. Stop reading here instead of
             // waiting for the server to hang up, and let `finally` close the
-            // connection — a free-tier instance should not hold an idle stream.
+            // connection - a free-tier instance should not hold an idle stream.
             break;
           }
           // Refetch for the fields the stream does not carry: chunk_count and
@@ -290,7 +286,7 @@ export function DocumentManager({
         if (ACCEPTED_EXTENSIONS.includes(extensionOf(file.name))) {
           accepted.push(file);
         } else {
-          rejected.push(`${file.name} — only PDF, TXT and Markdown are accepted`);
+          rejected.push(`${file.name}: only PDF, TXT and Markdown are accepted`);
         }
       }
 
@@ -319,7 +315,7 @@ export function DocumentManager({
         } catch (error) {
           setUploadErrors((prev) => [
             ...prev,
-            `${file.name} — ${describeError(error)}`,
+            `${file.name}: ${describeError(error)}`,
           ]);
         } finally {
           setUploadingNames((prev) => prev.filter((name) => name !== file.name));
@@ -353,14 +349,47 @@ export function DocumentManager({
     }
   };
 
+  // ----------------------------------------------------------- download
+
+  /**
+   * The original bytes are stored at upload time (`document.blob_ref = data`,
+   * before ingest even starts), so this works regardless of ingest status -
+   * unlike search/citation, "download the file I gave you" has no dependency
+   * on parsing having finished.
+   */
+  const downloadDocument = useCallback(async (doc: DocumentSummary) => {
+    const { blob, filename } = await api.downloadDocumentBlob(
+      doc.id,
+      await tokenRef.current(),
+    );
+    triggerBrowserDownload(blob, filename ?? doc.filename);
+  }, []);
+
+  const downloadAll = useCallback(async () => {
+    setDownloadingAll(true);
+    setDownloadAllErrors([]);
+    // Sequential: bursting many programmatic downloads at once is throttled
+    // or silently blocked by most browsers, not just an OOM concern this time.
+    for (const doc of documents) {
+      try {
+        await downloadDocument(doc);
+      } catch (error) {
+        setDownloadAllErrors((prev) => [
+          ...prev,
+          `${doc.filename}: ${describeError(error)}`,
+        ]);
+      }
+    }
+    setDownloadingAll(false);
+  }, [documents, downloadDocument]);
+
   // ------------------------------------------------------------- delete
 
-  const deleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await api.deleteDocument(docId, await tokenRef.current());
-      return docId;
-    },
-    onSuccess: (docId) => {
+  /** Shared by the single-tile delete and the bulk delete below, so both leave
+   * the ingest-stream guard, the live-status map, and the query cache in the
+   * same state instead of drifting into two slightly different cleanups. */
+  const forgetDocument = useCallback(
+    (docId: string) => {
       streamsRef.current.get(docId)?.abort();
       // Drop the guard entry too: re-uploading the same bytes reuses this id,
       // and that ingest does need a fresh subscription.
@@ -373,8 +402,43 @@ export function DocumentManager({
       queryClient.setQueryData<DocumentSummary[]>(DOCUMENTS_KEY, (prev) =>
         (prev ?? []).filter((row) => row.id !== docId),
       );
+    },
+    [queryClient, DOCUMENTS_KEY],
+  );
+
+  const deleteMutation = useMutation({
+    mutationFn: async (docId: string) => {
+      await api.deleteDocument(docId, await tokenRef.current());
+      return docId;
+    },
+    onSuccess: (docId) => {
+      forgetDocument(docId);
       onSelectionChange(selectedDocIds.filter((id) => id !== docId));
       setConfirmingDelete(null);
+      void queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY });
+    },
+  });
+
+  /** Removes every currently-selected (retrieval-scope) document from the
+   * corpus. Sequential for the same reason upload and download-all are: the
+   * API process shares its 512 MB with in-process ingest tasks. */
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const failures: string[] = [];
+      for (const id of ids) {
+        try {
+          await api.deleteDocument(id, await tokenRef.current());
+          forgetDocument(id);
+        } catch (error) {
+          failures.push(describeError(error));
+        }
+      }
+      return { ids, failures };
+    },
+    onSuccess: ({ ids, failures }) => {
+      onSelectionChange(selectedDocIds.filter((id) => !ids.includes(id)));
+      setConfirmingBulkDelete(false);
+      setBulkDeleteErrors(failures);
       void queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY });
     },
   });
@@ -405,11 +469,9 @@ export function DocumentManager({
     );
   };
 
-  const busy = uploadingNames.length > 0;
-
   if (workspaceId === null) {
     return (
-      <Card className={cn("h-full min-h-0", className)}>
+      <Card className={cn("h-full min-h-0 bg-zinc-50 dark:bg-zinc-950", className)}>
         <CardHeader>
           <CardTitle>Context</CardTitle>
         </CardHeader>
@@ -423,40 +485,41 @@ export function DocumentManager({
   }
 
   return (
-    <Card className={cn("h-full min-h-0", className)}>
-      <CardHeader>
+    <Card className={cn("h-full min-h-0 bg-zinc-50 dark:bg-zinc-950", className)}>
+      <CardHeader className="py-4">
         <div className="flex min-w-0 items-center gap-2">
-          <CardTitle>Context</CardTitle>
+          <CardTitle className="text-base">Context</CardTitle>
           <Badge variant="outline">{documents.length}</Badge>
         </div>
-        <div className="flex items-center gap-1.5">
+        {documents.length > 0 && (
+          // `ghost`, not a filled pill: in the reference this is a plain
+          // icon + label in the panel header (its icon sampled at #F4F4F4,
+          // i.e. near-white *on* the panel, which a filled light pill could
+          // not be). `dark:text-zinc-100` is that near-white step.
           <Button
             variant="ghost"
-            size="icon"
-            title="Refresh"
-            aria-label="Refresh document list"
-            disabled={documentsQuery.isFetching}
-            onClick={() => void documentsQuery.refetch()}
+            size="sm"
+            className="dark:text-zinc-100"
+            disabled={downloadingAll}
+            onClick={() => void downloadAll()}
           >
-            <RefreshCw
-              className={cn(
-                "size-3.5",
-                documentsQuery.isFetching && "animate-spin",
-              )}
-            />
-          </Button>
-          <Button size="sm" disabled={busy} onClick={() => fileInputRef.current?.click()}>
-            {busy ? (
+            {downloadingAll ? (
               <LoaderCircle className="size-3.5 animate-spin" />
             ) : (
-              <Upload className="size-3.5" />
+              <Download className="size-3.5" />
             )}
-            Upload
+            Download all
           </Button>
-        </div>
+        )}
       </CardHeader>
 
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+      <CardContent
+        onDrop={handleDrop}
+        onDragOver={(event) => event.preventDefault()}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+      >
         <input
           ref={fileInputRef}
           type="file"
@@ -470,33 +533,40 @@ export function DocumentManager({
           }}
         />
 
-        <div
-          onDrop={handleDrop}
-          onDragOver={(event) => event.preventDefault()}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-          className={cn(
-            "rounded-lg border border-dashed px-4 py-5 text-center transition-colors",
-            dragging
-              ? "border-accent-500 bg-accent-50 dark:border-accent-400 dark:bg-accent-500/10"
-              : "border-zinc-300 bg-zinc-50/60 dark:border-zinc-700 dark:bg-zinc-900/40",
-          )}
-        >
-          <Upload className="mx-auto size-5 text-zinc-400 dark:text-zinc-500" />
-          <p className="mt-2 text-sm font-medium text-zinc-700 dark:text-zinc-200">
-            Drop files here
-          </p>
-          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-            PDF, TXT or Markdown ·{" "}
-            <button
-              type="button"
-              className="font-medium text-accent-600 underline-offset-2 hover:underline dark:text-accent-400"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              browse
-            </button>
-          </p>
-        </div>
+        {/*
+          Drag-and-drop and the file picker both work anywhere over this
+          panel (the handlers above sit on the whole scroll container), but
+          the *resting-state* affordance stays a single slim row rather than
+          a permanent dashed box - the reference's own Artifacts panel has no
+          upload chrome at all, since Claude generates those files itself;
+          KnowledgeHub's documents are user-supplied, so some affordance has
+          to exist, but it doesn't need to dominate the panel to be
+          discoverable. The full dropzone still appears, briefly, as the drop
+          target the instant a drag actually enters the panel.
+        */}
+        {dragging ? (
+          <div className="rounded-lg border border-dashed border-accent-500 bg-accent-50 px-4 py-5 text-center dark:border-accent-400 dark:bg-accent-500/10">
+            <Upload className="mx-auto size-5 text-accent-600 dark:text-accent-400" />
+            <p className="mt-2 text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              Drop files here
+            </p>
+            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+              PDF, TXT or Markdown
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
+          >
+            <Upload className="size-3.5 text-zinc-400 dark:text-zinc-500" aria-hidden />
+            Add files
+            <span className="font-normal text-zinc-400 dark:text-zinc-500">
+              PDF, TXT or Markdown
+            </span>
+          </button>
+        )}
 
         {uploadingNames.length > 0 && (
           <ul className="space-y-1">
@@ -506,7 +576,7 @@ export function DocumentManager({
                 className="flex items-center gap-2 rounded-md bg-zinc-100 px-2.5 py-1.5 text-xs text-zinc-600 dark:bg-zinc-800/60 dark:text-zinc-300"
               >
                 <LoaderCircle className="size-3 animate-spin" />
-                <span className="truncate">Uploading {name}…</span>
+                <span className="truncate">Uploading {name}...</span>
               </li>
             ))}
           </ul>
@@ -536,59 +606,124 @@ export function DocumentManager({
           </div>
         )}
 
-        {/* Retrieval scope. Kept above the list and always visible: which
-            documents get searched is the single thing a checkbox here changes. */}
-        <div
-          className={cn(
-            "rounded-md border px-2.5 py-2",
-            scopeNarrowed
-              ? "border-accent-300 bg-accent-50 dark:border-accent-500/40 dark:bg-accent-500/10"
-              : "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/50",
-          )}
-        >
-          <div className="flex items-center gap-2">
-            <Checkbox
-              checked={allReadySelected}
-              indeterminate={scopeNarrowed}
-              disabled={readyIds.length === 0}
-              aria-label="Select all ready documents"
-              onChange={(event) =>
-                onSelectionChange(event.target.checked ? [...readyIds] : [])
-              }
-            />
-            <p className="flex-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
-              {readyIds.length === 0
-                ? "No documents are ready to search yet"
-                : scopeNarrowed
-                  ? `Searching ${selectedReady.length} of ${readyIds.length} documents`
-                  : `Searching all ${readyIds.length} ready document${readyIds.length === 1 ? "" : "s"}`}
-            </p>
-            {selectedReady.length > 0 && (
+        {downloadAllErrors.length > 0 && (
+          <div className="rounded-md border border-red-200 bg-red-50 p-2.5 dark:border-red-500/30 dark:bg-red-500/10">
+            <div className="flex items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-red-800 dark:text-red-300">
+                <TriangleAlert className="size-3.5" />
+                Some downloads failed
+              </p>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-5 px-1.5"
-                onClick={() => onSelectionChange([])}
+                className="h-5 px-1.5 text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-500/20"
+                onClick={() => setDownloadAllErrors([])}
               >
-                Clear
+                Dismiss
               </Button>
-            )}
+            </div>
+            <ul className="mt-1 space-y-0.5 text-xs text-red-700 dark:text-red-300">
+              {downloadAllErrors.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+            </ul>
           </div>
-          <p className="mt-1 pl-6 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">
-            {scopeNarrowed
-              ? `The other ${readyIds.length - selectedReady.length} document${readyIds.length - selectedReady.length === 1 ? " is" : "s are"} excluded — nothing in them can be retrieved or cited.`
-              : "Tick individual documents to narrow retrieval to just those."}
-          </p>
-        </div>
+        )}
 
-        {documentsQuery.isPending && (
+        {/* Retrieval scope. Kept above the grid and always visible once there
+            is something to scope - which documents get searched is the
+            single thing this checkbox changes, and that question doesn't
+            exist yet for an empty workspace. */}
+        {!showLoading && documents.length > 0 && (
+          <>
+            <div
+              className={cn(
+                "flex items-center gap-2.5 rounded-md border px-3 py-2.5",
+                scopeNarrowed
+                  ? "border-zinc-300 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800"
+                  : "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/50",
+              )}
+            >
+              <Checkbox
+                checked={allReadySelected}
+                indeterminate={scopeNarrowed}
+                disabled={readyIds.length === 0}
+                aria-label="Select all ready documents"
+                onChange={(event) =>
+                  onSelectionChange(event.target.checked ? [...readyIds] : [])
+                }
+              />
+              <p className="flex-1 text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                Select All
+              </p>
+              {selectedReady.length > 0 && !confirmingBulkDelete && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="h-6 px-2"
+                  onClick={() => {
+                    bulkDeleteMutation.reset();
+                    setBulkDeleteErrors([]);
+                    setConfirmingBulkDelete(true);
+                  }}
+                >
+                  <Trash2 className="size-3.5" />
+                  Delete {selectedReady.length}
+                </Button>
+              )}
+            </div>
+
+            {confirmingBulkDelete && selectedReady.length > 0 && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/30">
+                <p className="text-xs font-medium text-red-800 dark:text-red-300">
+                  Delete {selectedReady.length} document
+                  {selectedReady.length === 1 ? "" : "s"} from this workspace?
+                </p>
+                <p className="mt-1 text-xs leading-5 text-red-700 dark:text-red-400">
+                  Their chunks and citation records go with them. This
+                  can&rsquo;t be undone.
+                </p>
+                {bulkDeleteErrors.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5 text-xs text-red-700 dark:text-red-300">
+                    {bulkDeleteErrors.map((message) => (
+                      <li key={message}>{message}</li>
+                    ))}
+                  </ul>
+                )}
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={bulkDeleteMutation.isPending}
+                    onClick={() => bulkDeleteMutation.mutate([...selectedReady])}
+                  >
+                    {bulkDeleteMutation.isPending && (
+                      <LoaderCircle className="size-3 animate-spin" />
+                    )}
+                    Delete
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={bulkDeleteMutation.isPending}
+                    onClick={() => setConfirmingBulkDelete(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {showLoading && (
           <p className="flex items-center gap-2 px-1 py-6 text-xs text-zinc-500 dark:text-zinc-400">
             <LoaderCircle className="size-3.5 animate-spin" />
-            Loading documents…
+            Loading documents...
           </p>
         )}
 
-        {documentsQuery.isError && (
+        {!showLoading && documentsQuery.isError && (
           <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs dark:border-red-500/30 dark:bg-red-500/10">
             <p className="font-semibold text-red-800 dark:text-red-300">
               Could not load documents
@@ -607,46 +742,47 @@ export function DocumentManager({
           </div>
         )}
 
-        {documentsQuery.isSuccess && documents.length === 0 && (
+        {!showLoading && documentsQuery.isSuccess && documents.length === 0 && (
           <p className="px-1 py-6 text-center text-xs text-zinc-500 dark:text-zinc-400">
             No documents yet. Upload one to start asking questions.
           </p>
         )}
 
-        <ul className="space-y-2">
-          {documents.map((doc) => (
-            <DocumentRow
-              key={doc.id}
-              doc={doc}
-              live={live[doc.id]}
-              selected={selectedDocIds.includes(doc.id)}
-              active={activeDocId === doc.id}
-              confirming={confirmingDelete === doc.id}
-              deleting={
-                deleteMutation.isPending && deleteMutation.variables === doc.id
-              }
-              deleteError={
-                confirmingDelete === doc.id && deleteMutation.isError
-                  ? describeError(deleteMutation.error)
-                  : null
-              }
-              onToggle={() => toggleDocument(doc.id)}
-              onOpen={() => onOpenDocument(doc.id)}
-              onRequestDelete={() => {
-                deleteMutation.reset();
-                setConfirmingDelete(doc.id);
-              }}
-              onCancelDelete={() => setConfirmingDelete(null)}
-              onConfirmDelete={() => deleteMutation.mutate(doc.id)}
-            />
-          ))}
-        </ul>
+        <div className="flex flex-col gap-2">
+          {!showLoading &&
+            documents.map((doc) => (
+              <DocumentRow
+                key={doc.id}
+                doc={doc}
+                live={live[doc.id]}
+                selected={selectedDocIds.includes(doc.id)}
+                active={activeDocId === doc.id}
+                confirming={confirmingDelete === doc.id}
+                deleting={
+                  deleteMutation.isPending && deleteMutation.variables === doc.id
+                }
+                deleteError={
+                  confirmingDelete === doc.id && deleteMutation.isError
+                    ? describeError(deleteMutation.error)
+                    : null
+                }
+                onToggle={() => toggleDocument(doc.id)}
+                onOpen={() => onOpenDocument(doc.id)}
+                onRequestDelete={() => {
+                  deleteMutation.reset();
+                  setConfirmingDelete(doc.id);
+                }}
+                onCancelDelete={() => setConfirmingDelete(null)}
+                onConfirmDelete={() => deleteMutation.mutate(doc.id)}
+              />
+            ))}
+        </div>
       </CardContent>
     </Card>
   );
 }
 
-// -------------------------------------------------------------------- row
+// ------------------------------------------------------------------- row
 
 interface DocumentRowProps {
   doc: DocumentSummary;
@@ -663,6 +799,17 @@ interface DocumentRowProps {
   onConfirmDelete: () => void;
 }
 
+/**
+ * A full-width row - matching the reference's Artifacts panel, which is a
+ * stacked list, not a tile grid (that grid belongs to a *different* screen in
+ * the reference product, the one this was mistakenly modelled on earlier).
+ * Icon, filename and status/format subtitle on the left; the retrieval-scope
+ * checkbox (always visible - the user asked to keep this discoverable, not
+ * hover-only like the reference's own checkbox) and the escalation-cap/
+ * sanitization warnings (trust signals, same non-dismissible principle
+ * `DegradationBanner` applies) on the right. Hover-revealed delete "X" sits
+ * at the far right, past the checkbox, so it never overlaps it.
+ */
 function DocumentRow({
   doc,
   live,
@@ -679,9 +826,11 @@ function DocumentRow({
 }: DocumentRowProps) {
   const ready = doc.status === "ready";
   const failed = doc.status === "failed";
+  const pending = !ready && !failed;
   const extraction = extractionOf(doc);
   const sanitization = sanitizationOf(doc);
-  const created = formatCreated(doc.created_at);
+  const capped = !!extraction && extraction.pages_flagged > extraction.pages_escalated;
+  const kind = fileKind(doc.filename, doc.mime);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -690,321 +839,208 @@ function DocumentRow({
   };
 
   return (
-    <li>
-      <div
-        role="button"
-        tabIndex={0}
-        aria-pressed={active}
-        onClick={onOpen}
-        onKeyDown={handleKeyDown}
-        className={cn(
-          "group w-full cursor-pointer rounded-lg border p-2.5 text-left transition-colors",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
-          active
-            ? "border-accent-400 bg-accent-50/70 dark:border-accent-500/50 dark:bg-accent-500/10"
-            : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900",
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={active}
+      onClick={onOpen}
+      onKeyDown={handleKeyDown}
+      className={cn(
+        "group relative flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-left shadow-sm transition-colors",
+        active
+          ? "border-zinc-400 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800"
+          : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-transparent dark:bg-zinc-900 dark:hover:bg-zinc-800",
+      )}
+    >
+      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-lg", kind.swatchClassName)}>
+        <kind.Icon className="size-5" aria-hidden />
+      </span>
+
+      <div className="min-w-0 flex-1">
+        {/* dark:text-zinc-100, not -50 - this ramp's `z50` stays deliberately
+            dark in dark mode (a background-role value, not a text one; see
+            globals.css), so `dark:text-zinc-50` here was near-black text on
+            a near-black row. `z100` is the ramp's actual "brightest text"
+            step in dark mode. */}
+        <p className="truncate text-sm font-semibold leading-snug text-zinc-900 dark:text-zinc-100">
+          {doc.filename}
+        </p>
+
+        {pending &&
+          (live?.progress ? (
+            <>
+              <p className="mt-0.5 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                {kind.label} · {STATUS_LABEL[doc.status]} {live.progress.done}/
+                {live.progress.total} {live.progress.unit}
+              </p>
+              <Progress
+                value={live.progress.done}
+                max={live.progress.total}
+                aria-label={`${STATUS_LABEL[doc.status]} progress`}
+                className="mt-1 max-w-xs"
+              />
+            </>
+          ) : (
+            <>
+              <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                {kind.label} · {STATUS_LABEL[doc.status]}
+              </p>
+              <StageTrail status={doc.status} className="mt-1 max-w-xs" />
+            </>
+          ))}
+
+        {live?.streamLost && pending && (
+          <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+            Stream dropped, refresh
+          </p>
         )}
-      >
-        <div className="flex items-start gap-2.5">
-          {/* The checkbox controls retrieval scope, the row controls the source
-              pane — so it must not fall through to the row's click handler. */}
-          <span
-            className="pt-0.5"
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
+
+        {ready && (
+          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+            <CircleCheck className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+            {kind.label} · {doc.chunk_count} chunks
+          </p>
+        )}
+
+        {failed && (
+          <p
+            className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-red-600 dark:text-red-400"
+            title={doc.error ?? undefined}
           >
-            <Checkbox
-              checked={selected}
-              disabled={!ready}
-              onChange={onToggle}
-              aria-label={
-                ready
-                  ? `Include ${doc.filename} in retrieval`
-                  : `${doc.filename} is not ready to search`
-              }
-              title={
-                ready
-                  ? "Include this document in retrieval"
-                  : "Only ready documents can be searched"
-              }
-            />
-          </span>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <FileText className="size-3.5 shrink-0 text-zinc-400 dark:text-zinc-500" />
-              <span className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                {doc.filename}
-              </span>
-            </div>
-
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-              <StatusBadge status={doc.status} />
-              {ready && <span>{doc.chunk_count} chunks</span>}
-              {created && <span>{created}</span>}
-              {selected && (
-                <Badge variant="info">
-                  <ScanText className="size-2.5" />
-                  in search scope
-                </Badge>
-              )}
-            </div>
-
-            {live?.progress && !ready && !failed && (
-              <div className="mt-2">
-                <Progress
-                  value={live.progress.done}
-                  max={live.progress.total}
-                  aria-label={`${STATUS_LABEL[doc.status]} progress`}
-                />
-                <p className="mt-1 text-[11px] tabular-nums text-zinc-500 dark:text-zinc-400">
-                  {live.progress.done} / {live.progress.total}{" "}
-                  {live.progress.unit}
-                </p>
-              </div>
-            )}
-
-            {!ready && !failed && !live?.progress && (
-              <div className="mt-2">
-                <StageTrail status={doc.status} />
-              </div>
-            )}
-
-            {live?.streamLost && !ready && !failed && (
-              <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-400">
-                <TriangleAlert className="size-3" />
-                Live progress stream dropped — refresh to check the real status.
-              </p>
-            )}
-
-            {failed && doc.error && (
-              <p className="mt-1.5 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
-                {doc.error}
-              </p>
-            )}
-
-            {ready && extraction && <ExtractionQuality extraction={extraction} />}
-
-            {sanitization && sanitization.removed_spans > 0 && (
-              <p className="mt-1.5 flex items-start gap-1.5 rounded border border-zinc-200 bg-zinc-50 px-2 py-1 text-[11px] leading-4 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
-                <ShieldAlert className="mt-px size-3 shrink-0" />
-                <span>
-                  {sanitization.removed_spans} hidden span
-                  {sanitization.removed_spans === 1 ? "" : "s"} stripped at
-                  ingest
-                  {Object.keys(sanitization.kinds ?? {}).length > 0 && (
-                    <> ({formatKinds(sanitization.kinds)})</>
-                  )}
-                  . This content is not searchable and cannot be cited.
-                </span>
-              </p>
-            )}
-          </div>
-
-          <span
-            className="shrink-0"
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            {!confirming && (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Delete ${doc.filename}`}
-                title="Delete"
-                className="text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
-                onClick={onRequestDelete}
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
-            )}
-          </span>
-        </div>
-
-        {confirming && (
-          <div
-            className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5 dark:border-red-500/30 dark:bg-red-500/10"
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            <p className="text-xs font-medium text-red-800 dark:text-red-300">
-              Delete “{doc.filename}”?
-            </p>
-            <p className="mt-0.5 text-[11px] leading-4 text-red-700 dark:text-red-300">
-              Its chunks, vectors and citation records go with it. Past answers
-              that cited it will lose their sources. This cannot be undone.
-            </p>
-            {deleteError && (
-              <p className="mt-1 text-[11px] font-medium text-red-800 dark:text-red-200">
-                {deleteError}
-              </p>
-            )}
-            <div className="mt-2 flex gap-2">
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={deleting}
-                onClick={onConfirmDelete}
-              >
-                {deleting && <LoaderCircle className="size-3 animate-spin" />}
-                Delete
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={deleting}
-                onClick={onCancelDelete}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
+            <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+            {kind.label} · {doc.error ?? "Failed"}
+          </p>
         )}
       </div>
-    </li>
-  );
-}
 
-// ----------------------------------------------------------- status bits
+      <div className="flex shrink-0 items-center gap-2 empty:hidden">
+        {sanitization && sanitization.removed_spans > 0 && (
+          <span
+            className="shrink-0"
+            title={`${sanitization.removed_spans} hidden span${sanitization.removed_spans === 1 ? "" : "s"} stripped at ingest${Object.keys(sanitization.kinds ?? {}).length > 0 ? ` (${formatKinds(sanitization.kinds)})` : ""}. This content is not searchable and cannot be cited.`}
+          >
+            <ShieldAlert className="size-4 text-amber-600 dark:text-amber-400" aria-hidden />
+          </span>
+        )}
+        {capped && extraction && (
+          <span
+            className="shrink-0"
+            title={`Escalation cap reached: ${extraction.pages_flagged - extraction.pages_escalated} page(s) parsed locally only and may be incomplete.`}
+          >
+            <TriangleAlert className="size-4 text-amber-600 dark:text-amber-400" aria-hidden />
+          </span>
+        )}
+      </div>
 
-function StatusBadge({ status }: { status: DocumentStatus }) {
-  if (status === "ready") {
-    return (
-      <Badge variant="success">
-        <CircleCheck className="size-2.5" />
-        Ready
-      </Badge>
-    );
-  }
-  if (status === "failed") {
-    return (
-      <Badge variant="danger">
-        <TriangleAlert className="size-2.5" />
-        Failed
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="info">
-      <LoaderCircle className="size-2.5 animate-spin" />
-      {STATUS_LABEL[status]}
-    </Badge>
-  );
-}
-
-/** queued → parsing → chunking → embedding, drawn as four filling segments. */
-function StageTrail({ status }: { status: DocumentStatus }) {
-  const current = PIPELINE_STEPS.indexOf(status);
-  return (
-    <div className="flex items-center gap-1" aria-hidden>
-      {PIPELINE_STEPS.map((step, index) => (
-        <span
-          key={step}
-          className={cn(
-            "h-1 flex-1 rounded-full",
-            index < current
-              ? "bg-accent-500"
-              : index === current
-                ? "animate-pulse bg-accent-500"
-                : "bg-zinc-200 dark:bg-zinc-800",
-          )}
+      {/* The checkbox controls retrieval scope, the row controls the source
+          pane - so it must not fall through to the row's click handler.
+          Wrapped in its own fixed-size, centered box rather than just relying
+          on the parent row's `items-center`, because a native checkbox's
+          intrinsic box model is inconsistent enough across browsers that it
+          can sit a couple of pixels off its neighbours' baseline otherwise. */}
+      <span
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="flex size-6 shrink-0 items-center justify-center"
+      >
+        <Checkbox
+          checked={selected}
+          disabled={!ready}
+          onChange={onToggle}
+          aria-label={
+            ready
+              ? `Include ${doc.filename} in retrieval`
+              : `${doc.filename} is not ready to search`
+          }
+          title={
+            ready
+              ? "Include this document in retrieval"
+              : "Only ready documents can be searched"
+          }
         />
-      ))}
+      </span>
+
+      {/* Quick delete, hover-revealed. A confirm step still guards it despite
+          the low-friction "X": deleting a document takes its chunks,
+          citation records, and any past answer's sources with it. */}
+      <button
+        type="button"
+        aria-label={`Delete ${doc.filename}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onRequestDelete();
+        }}
+        className="hidden size-6 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-zinc-500 hover:bg-red-100 hover:text-red-700 group-hover:flex dark:bg-zinc-700 dark:text-zinc-400 dark:hover:bg-red-950/50 dark:hover:text-red-300"
+      >
+        <X className="size-3.5" aria-hidden />
+      </button>
+
+      {confirming && (
+        <div
+          className="absolute inset-0 z-10 flex flex-col justify-center rounded-xl border border-red-300 bg-white p-3.5 dark:border-red-900 dark:bg-zinc-950"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <p className="text-xs font-medium text-red-800 dark:text-red-300">
+            Delete this document?
+          </p>
+          <p className="mt-1 text-xs leading-5 text-red-700 dark:text-red-400">
+            Its chunks and citation records go with it. This can&rsquo;t be undone.
+          </p>
+          {deleteError && (
+            <p className="mt-1.5 text-xs font-medium text-red-800 dark:text-red-200">
+              {deleteError}
+            </p>
+          )}
+          <div className="mt-2 flex gap-2">
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              disabled={deleting}
+              onClick={onConfirmDelete}
+            >
+              {deleting && <LoaderCircle className="size-3 animate-spin" />}
+              Delete
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              disabled={deleting}
+              onClick={onCancelDelete}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// ------------------------------------------------------ extraction panel
-
-function ExtractionQuality({ extraction }: { extraction: ExtractionSignal }) {
-  const {
-    pages_total,
-    pages_escalated,
-    pages_flagged,
-    tables_recovered,
-    figures_described,
-    confidence,
-  } = extraction;
-
-  // The cap: pages the heuristic flagged as complex but that never reached the
-  // VLM. Those pages carry Tier-1 text only, which is exactly the case where a
-  // quiet UI would let a user trust a half-parsed table.
-  const capped = pages_flagged > pages_escalated;
-  const missed = pages_flagged - pages_escalated;
-
-  const pct = Math.round(Math.min(Math.max(confidence, 0), 1) * 100);
-  const tone =
-    pct >= 80
-      ? "text-emerald-700 dark:text-emerald-400"
-      : pct >= 55
-        ? "text-amber-700 dark:text-amber-400"
-        : "text-red-700 dark:text-red-400";
-  const bar =
-    pct >= 80
-      ? "bg-emerald-500"
-      : pct >= 55
-        ? "bg-amber-500"
-        : "bg-red-500";
-
+/** queued -> parsing -> chunking -> embedding, drawn as four filling segments. */
+function StageTrail({ status, className }: { status: DocumentStatus; className?: string }) {
+  const current = PIPELINE_STEPS.indexOf(status);
   return (
-    <div className="mt-2 space-y-1.5">
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
-          Extraction
-        </span>
-        <Progress
-          value={pct}
-          barClassName={bar}
-          className="h-1 flex-1"
-          aria-label="Extraction confidence"
+    <div className={cn("flex items-center gap-1", className)} aria-hidden>
+      {PIPELINE_STEPS.map((step, index) => (
+        <span
+          key={step}
+          // Neutral fill, matching `ui/progress.tsx` - progress is conveyed
+          // by *how many* segments are filled plus the pulse on the active
+          // one, so it doesn't need a hue to be legible, and these sit on
+          // screen for the whole duration of an ingest.
+          className={cn(
+            "h-1 flex-1 rounded-full",
+            index < current
+              ? "bg-primary"
+              : index === current
+                ? "animate-pulse bg-primary"
+                : "bg-zinc-200 dark:bg-zinc-800",
+          )}
         />
-        <span className={cn("text-[11px] font-semibold tabular-nums", tone)}>
-          {pct}%
-        </span>
-      </div>
-
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-        <span title="Pages sent to the vision model because a local heuristic flagged them as complex">
-          {pages_escalated}/{pages_total} pages via VLM
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Table2 className="size-2.5" />
-          {tables_recovered} table{tables_recovered === 1 ? "" : "s"}
-        </span>
-        {figures_described > 0 && (
-          <span className="inline-flex items-center gap-1">
-            <WandSparkles className="size-2.5" />
-            {figures_described} figure
-            {figures_described === 1 ? "" : "s"} described
-          </span>
-        )}
-      </div>
-
-      {figures_described > 0 && (
-        <p className="flex items-start gap-1.5 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">
-          <Info className="mt-px size-3 shrink-0" />
-          Figure descriptions are model-written, not document text. They are
-          marked as such in the source pane.
-        </p>
-      )}
-
-      {capped && (
-        <div className="rounded-md border border-amber-400 bg-amber-50 p-2 dark:border-amber-500/40 dark:bg-amber-500/10">
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-900 dark:text-amber-200">
-            <TriangleAlert className="size-3.5 shrink-0" />
-            Escalation cap reached — {missed} page
-            {missed === 1 ? "" : "s"} parsed locally only
-          </p>
-          <p className="mt-1 text-[11px] leading-4 text-amber-800 dark:text-amber-300">
-            {pages_flagged} page{pages_flagged === 1 ? "" : "s"} looked too
-            complex for the local parser but only {pages_escalated} could be sent
-            to the vision model before this document hit its cap. Text from the
-            remaining {missed} may be incomplete, and tables on them are likely
-            garbled. Answers drawing on those pages can be thin without saying
-            so.
-          </p>
-        </div>
-      )}
+      ))}
     </div>
   );
 }

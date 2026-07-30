@@ -6,8 +6,8 @@
  * keepalive and a `:` line is parsed as data. Neither throws, and both look like
  * a model problem rather than a client bug.
  *
- * This drives the real module against real server output — including the
- * heartbeat frames and whatever chunking the network happens to produce — and
+ * This drives the real module against real server output - including the
+ * heartbeat frames and whatever chunking the network happens to produce - and
  * asserts the §8 ordering guarantees on what comes back.
  *
  *   pnpm exec tsx scripts/verify-sse.ts
@@ -29,7 +29,7 @@ Page the on-call engineer within 15 minutes of an E-1180 alert.
 `;
 
 function check(label: string, ok: boolean, detail = ""): boolean {
-  console.log(`  ${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
+  console.log(`  ${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` - ${detail}` : ""}`);
   return ok;
 }
 
@@ -54,7 +54,7 @@ async function main(): Promise<number> {
     "exactly one terminal ingest event",
     ingestEvents.filter((e) => e === "document.complete" || e === "document.error")
       .length === 1,
-    ingestEvents.join(" → "),
+    ingestEvents.join(" -> "),
   )
     ? 0
     : 1;
@@ -125,7 +125,7 @@ async function main(): Promise<number> {
   //
   // "Follow-up questions should work" is the requirement most easily faked:
   // each turn looks correct in isolation while the conversation has no memory
-  // at all. The test is a pronoun — "it" is meaningless without the prior turn.
+  // at all. The test is a pronoun - "it" is meaningless without the prior turn.
   console.log("\nmulti-turn:");
   let conversationId: string | null = null;
   for await (const event of streamChat(API, {
@@ -143,7 +143,7 @@ async function main(): Promise<number> {
 
   // Checking only the answer text is a false positive waiting to happen: "What
   // error code does it raise?" contains "error code", which BM25 finds in the
-  // document on its own — the turn looks like memory working when it is just
+  // document on its own - the turn looks like memory working when it is just
   // keyword retrieval. So the assertion is on the *rewrite*, which is the only
   // stage that can resolve "it" and can only do so from conversation history.
   let followUp = "";
@@ -176,7 +176,7 @@ async function main(): Promise<number> {
   failures += check(
     "rewrite resolved the pronoun from history",
     rewritten,
-    rewritten ? "'it' was substituted" : "no rewrite — memory did not reach the node",
+    rewritten ? "'it' was substituted" : "no rewrite - memory did not reach the node",
   )
     ? 0
     : 1;

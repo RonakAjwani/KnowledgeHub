@@ -138,7 +138,7 @@ def test_rrf_max_is_analytic_and_config_derived() -> None:
     """I7: normalise against a fixed, analytically known maximum.
 
     A chunk ranked #1 in both branches scores (w_dense + w_sparse) / (k + base).
-    The value must depend only on configuration — never on retrieved scores.
+    The value must depend only on configuration - never on retrieved scores.
 
     ``rank_base`` defaults to 0: measured against Qdrant 1.18, not assumed. See
     ``scripts/probe_rrf_rank_base.py``.

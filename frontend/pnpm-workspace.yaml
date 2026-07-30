@@ -1,4 +1,4 @@
-# pnpm blocks package postinstall scripts by default — a good default, since a
+# pnpm blocks package postinstall scripts by default - a good default, since a
 # postinstall is arbitrary code execution at install time. These are legitimate
 # native builds from the Next.js and Tailwind toolchains, allowed explicitly
 # rather than by disabling the protection wholesale.
@@ -6,5 +6,5 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
   "@tailwindcss/oxide": true
-  # tsx's bundler, dev-only — used to exercise lib/sse.ts against a live backend.
+  # tsx's bundler, dev-only - used to exercise lib/sse.ts against a live backend.
   esbuild: true

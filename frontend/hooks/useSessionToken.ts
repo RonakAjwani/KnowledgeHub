@@ -9,7 +9,7 @@
  * `useAuth()` unconditionally would crash the dev-mode build (no publishable
  * key, no provider mounted) on the first render of anything that needs a token.
  *
- * Shared by every component that calls the API with auth — originally lived
+ * Shared by every component that calls the API with auth - originally lived
  * only inside `useChatStream`, duplicated here rather than imported so a
  * workspace sidebar (or anything else) doesn't have to render a chat stream
  * just to get a token.

@@ -1,10 +1,10 @@
 """Conditional Cohere rerank, with a cache and a fallback chain that never fails.
 
-Reranking is the single biggest quality jump in the stack — larger than the
+Reranking is the single biggest quality jump in the stack - larger than the
 hybrid gain itself. It is also the most constrained resource in it: the trial key
 allows **1,000 calls per month at 10 rpm**, so reranking unconditionally would cap
 the entire deployment at roughly a thousand lifetime queries. A local
-cross-encoder is not an option either — `bge-reranker-v2-m3` is ~568 M params and
+cross-encoder is not an option either - `bge-reranker-v2-m3` is ~568 M params and
 the host has 512 MB.
 
 Three responses, all of which have to hold at once:
@@ -14,17 +14,17 @@ Three responses, all of which have to hold at once:
    chunk first, a cross-encoder is unlikely to overturn it, so the call buys
    nothing. Margin without agreement is a one-sided branch shouting confidently.
 2. **Cache on ``(query, doc_set)``.** Re-asking the same question over the same
-   documents — which is exactly what an eval sweep does — costs one call, not N.
-3. **Fall back, never fail.** Cohere → cache → fused order. Every step below the
+   documents - which is exactly what an eval sweep does - costs one call, not N.
+3. **Fall back, never fail.** Cohere -> cache -> fused order. Every step below the
    first records a ``Degradation``, so a degraded ordering is never
    indistinguishable from a reranked one (I1).
 
 **402 and 429 are different failures and must be handled differently.** Cohere
 distinguishes them, so this client does too:
 
-* **429** — per-minute limit. Transient; the next query may succeed. Fall back for
+* **429** - per-minute limit. Transient; the next query may succeed. Fall back for
   this query only.
-* **402** — monthly quota gone. Terminal, and every subsequent call is guaranteed
+* **402** - monthly quota gone. Terminal, and every subsequent call is guaranteed
   to return it too. Trips a circuit breaker, so the remaining queries of the month
   do not each spend the full 2 s timeout budget rediscovering a known fact.
 
@@ -96,7 +96,7 @@ def is_decisive(
     * the winner is top-3 in **both** branches.
 
     The second is the load-bearing one. A chunk can top the fused list on a large
-    margin while being invisible to one branch entirely — that is one-sided
+    margin while being invisible to one branch entirely - that is one-sided
     evidence, and precisely the case where a cross-encoder earns its call.
     """
     if len(candidates) < 2:
@@ -240,7 +240,7 @@ class Reranker:
             )
 
         if response.status_code == 429:
-            # Transient. Do NOT trip the breaker — the next query may succeed.
+            # Transient. Do NOT trip the breaker - the next query may succeed.
             raise _RerankFailure(
                 DegradationReason.RATE_LIMITED,
                 "Cohere per-minute rate limit reached.",
@@ -256,7 +256,7 @@ class Reranker:
         # Cohere returns positions into the documents array we sent, so the
         # ordering is mapped back through our own candidate list rather than
         # trusting any id echoed by the upstream. The relevance score travels with
-        # it — it is the signal G2 gates on, and recomputing it from position
+        # it - it is the signal G2 gates on, and recomputing it from position
         # throws away the only calibrated number in the pipeline.
         return [
             (candidates[item["index"]].chunk.id, float(item["relevance_score"]))
@@ -288,14 +288,14 @@ def _reorder(
     only on *how many* results came back and not at all on whether any of them
     were relevant. With ``top_n = 5`` the blend was therefore exactly
     ``0.6·1.0 + 0.4·0.6 = 0.840`` on **every** query, and ``FLOOR_RERANK`` was
-    being compared against a constant — structurally incapable of firing, the
+    being compared against a constant - structurally incapable of firing, the
     same failure mode I7 forbids, reached by a different route.
 
     Cohere's scale separates cleanly enough to gate on: a measured 0.6485 for a
     relevant document against 0.0249 and 0.0170 for irrelevant ones.
 
     ``top_n`` truncates the response, so chunks Cohere did not return keep a
-    ``None`` score — not judged, rather than judged irrelevant (I2) — and
+    ``None`` score - not judged, rather than judged irrelevant (I2) - and
     :func:`relevance_score` excludes them from the blend rather than reading them
     as zeros.
     """

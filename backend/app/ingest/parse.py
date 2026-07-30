@@ -1,19 +1,19 @@
-"""Tier 1 parsing — local, always runs, no model involved.
+"""Tier 1 parsing - local, always runs, no model involved.
 
 Produces the ordered ``Block[]`` that ``build_normalized_text`` consumes. Three
 input types reach the same shape: PDF via ``pdfplumber``, and markdown and plain
 text via trivial splitters.
 
 The PDF path is the one with judgment in it. Naive extraction flattens a table
-into a stream of numbers — and the failure is worse than useless because it *looks*
+into a stream of numbers - and the failure is worse than useless because it *looks*
 like successful extraction: a column of revenue figures becomes a sentence, gets
 embedded as prose, and retrieves for nothing. So tables are located first, carved
 out of the page by bounding box, and emitted as atomic ``TABLE`` blocks in reading
 order alongside the prose around them.
 
 This module also produces the **complexity signal** that decides which pages get
-escalated to a VLM in Tier 2. That decision is a cheap local heuristic — table
-geometry, image coverage, text density — never a model. Spending an LLM call to
+escalated to a VLM in Tier 2. That decision is a cheap local heuristic - table
+geometry, image coverage, text density - never a model. Spending an LLM call to
 decide whether to spend an LLM call is not a saving.
 """
 
@@ -45,24 +45,24 @@ _SPARSE_TEXT_CHARS_PER_KILOPIXEL = 0.02
 # Word-boundary tolerance as a fraction of font size, passed to every pdfplumber
 # text call.
 #
-# Many PDFs — LaTeX output especially — encode no space glyphs at all: the space
+# Many PDFs - LaTeX output especially - encode no space glyphs at all: the space
 # between two words is a horizontal jump, not a character. pdfplumber recovers
 # word boundaries from those gaps, and its default absolute tolerance of 3pt is
-# wider than the inter-word gap in a 9–10pt body font, so whole sentences come
+# wider than the inter-word gap in a 9-10pt body font, so whole sentences come
 # back as ``Regulatorycomplianceinindustrialmaintenance``. That is invisible
 # downstream and catastrophic: BM25 tokenises the sentence as one term, so the
 # sparse branch cannot match anything in the document, and the dense branch is
 # left recovering meaning from wordpiece debris.
 #
 # Measured over this corpus, the ratio form (which scales with font size, unlike
-# a fixed tolerance) eliminated every over-long token — 199, 98 and 181 merged
-# runs in the three papers went to zero, recovering 1121 → 2633 words in the
-# worst case — while leaving the two documents that already extracted cleanly
+# a fixed tolerance) eliminated every over-long token - 199, 98 and 181 merged
+# runs in the three papers went to zero, recovering 1121 -> 2633 words in the
+# worst case - while leaving the two documents that already extracted cleanly
 # byte-for-byte identical. Short-word share moved under a percentage point, so
 # nothing is being split that should not be.
 _X_TOLERANCE_RATIO = 0.15
 
-# "Table 2", "TABLE II", "Tab. 3" at the start of a line — the author's own
+# "Table 2", "TABLE II", "Tab. 3" at the start of a line - the author's own
 # statement that a table is present. Anchored to line start so a passing mention
 # mid-sentence ("as Table 2 shows") does not trigger the fallback detector.
 _TABLE_CAPTION_RE = re.compile(r"^[ \t]*(?:Table|TABLE|Tab\.)\s*(?:[IVXLC]+|\d+)\b", re.M)
@@ -96,7 +96,7 @@ class ParseResult:
 
 
 class UnsupportedDocument(Exception):
-    """Raised when the bytes cannot be parsed at all — never a partial index."""
+    """Raised when the bytes cannot be parsed at all - never a partial index."""
 
 
 # ------------------------------------------------------------------- markdown
@@ -227,7 +227,7 @@ def _rescue_borderless_tables(page: pdfplumber.page.Page, text: str) -> list:
     """Find tables on a page that draws no ruling lines around them.
 
     pdfplumber's default detector keys on ruled lines, which LaTeX's `booktabs`
-    style deliberately omits — measured across the corpus, one 5-page paper
+    style deliberately omits - measured across the corpus, one 5-page paper
     captions three tables and the default strategy finds **zero** of them. The
     text is still extracted (it lands in the prose stream), but it is never
     marked as a table, so it can be split mid-row by the chunker and never picks
@@ -243,7 +243,7 @@ def _rescue_borderless_tables(page: pdfplumber.page.Page, text: str) -> list:
       a table here.
 
     That second condition is what keeps the noisy strategy off pages that simply
-    have none, and it is why this is scoped to captioned tables — an unlabelled
+    have none, and it is why this is scoped to captioned tables - an unlabelled
     borderless table stays missed, which is the honest trade for not
     hallucinating tables out of ordinary prose columns.
     """
@@ -256,7 +256,7 @@ def _rescue_borderless_tables(page: pdfplumber.page.Page, text: str) -> list:
             )
             or []
         )
-    except Exception:  # noqa: BLE001 — same contract as the default detector:
+    except Exception:  # noqa: BLE001 - same contract as the default detector:
         return []  # a page that defeats detection still has readable prose
 
 
@@ -280,7 +280,7 @@ def _assess_page(page: pdfplumber.page.Page, tables: list, text: str) -> PageAss
             continue
         cells = [c for row in rows for c in row]
         if cells and sum(1 for c in cells if not (c or "").strip()) / len(cells) > 0.5:
-            # Ruling lines were found but most cells came back empty — the
+            # Ruling lines were found but most cells came back empty - the
             # classic signature of a table Tier 1 can see but cannot read.
             assessment.reasons.append("degenerate_table")
 
@@ -306,7 +306,7 @@ def _blocks_from_words(
 
     Takes words rather than a rectangle on purpose. Cropping a rectangle drops
     any character straddling the boundary, so a column edge cutting through
-    "Macro-Economic" yields "mic" — and it needs a minimum-width constant to
+    "Macro-Economic" yields "mic" - and it needs a minimum-width constant to
     decide which strips are worth cropping at all, which is a number read off
     one document. Assigning each *whole* word to the column its centre falls in
     needs neither: an empty gutter simply gets no words.
@@ -342,10 +342,10 @@ def _blocks_from_words(
     for _, line_words in lines:
         # Left to right, always. Grouping tolerates a 2.5pt baseline difference
         # so a row's label and its figures land on one line, but the enclosing
-        # sort is by (top, x0) — so figures set a fraction higher than their own
+        # sort is by (top, x0) - so figures set a fraction higher than their own
         # label sort *ahead* of it. Measured on the 360 ONE macro table: label
         # top=145.264, figures top=143.878, and every row came out as
-        # "14.9 28.4 19.3 35.2 26.2 Two-wheeler sales (%YoY)" — each row's
+        # "14.9 28.4 19.3 35.2 26.2 Two-wheeler sales (%YoY)" - each row's
         # figures attached to the row above. Reading order within a line is a
         # property of x, not of a baseline that happens to jitter.
         line_words.sort(key=lambda w: w["x0"])
@@ -355,7 +355,7 @@ def _blocks_from_words(
         # A caption delimits a block, the same way a heading does. PDF text
         # arrives line by line with no paragraph markers, so without this the
         # caption gets absorbed into the surrounding paragraph and stops being
-        # recognisable as a caption at all — which silently costs every table its
+        # recognisable as a caption at all - which silently costs every table its
         # lead line, the one thing that makes it findable.
         if extract_label(text) is not None:
             flush()
@@ -439,7 +439,7 @@ def parse_pdf(data: bytes) -> ParseResult:
         for page in pdf.pages:
             try:
                 tables = page.find_tables() or []
-            except Exception:  # noqa: BLE001 — a page whose ruling lines confuse
+            except Exception:  # noqa: BLE001 - a page whose ruling lines confuse
                 tables = []  # the detector still has readable prose
 
             page_text = page.extract_text(x_tolerance_ratio=_X_TOLERANCE_RATIO) or ""
@@ -454,8 +454,8 @@ def parse_pdf(data: bytes) -> ParseResult:
             # Within a band, walk left to right as well. Skipping straight from a
             # table's top to its bottom discards whatever is printed *beside* it,
             # and on a multi-column page that is a whole column: measured on the
-            # 360 ONE factsheet it deleted the entire "Fund Details" box —
-            # manager, AUM, expense ratio, benchmark — from all 20 fund pages.
+            # 360 ONE factsheet it deleted the entire "Fund Details" box -
+            # manager, AUM, expense ratio, benchmark - from all 20 fund pages.
             page_words = (
                 page.extract_words(
                     extra_attrs=["size"], x_tolerance_ratio=_X_TOLERANCE_RATIO

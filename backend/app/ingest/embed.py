@@ -6,12 +6,12 @@ whole argument for hybrid retrieval:
 * **Dense** (``bge-small-en-v1.5``) handles paraphrase, synonymy and conceptual
   queries, and fails on exact identifiers, error codes, version numbers and rare
   proper nouns.
-* **Sparse** (``Qdrant/bm25``) is the mirror image — and it is the hero for
+* **Sparse** (``Qdrant/bm25``) is the mirror image - and it is the hero for
   tables, which are dense with exactly the labels and numbers embeddings are
   worst at.
 
 ``bge-small`` rather than ``bge-base`` is forced by the 512 MB ceiling, and
-``bge-m3`` is impossible in-process at all — fastembed ships no quantized variant,
+``bge-m3`` is impossible in-process at all - fastembed ships no quantized variant,
 only full fp32 ONNX at ~2.27 GB.
 
 **Batch size is a real tuning parameter here, not a detail.** At 0.1 vCPU the
@@ -20,7 +20,7 @@ RAM are not obviously the same number, and the model itself is already ~130 MB
 resident. It stays in config and gets set against measured RSS.
 
 BM25 computes IDF **server-side** in Qdrant, so this module only produces term
-frequencies — there is no corpus statistic to maintain in application code, and
+frequencies - there is no corpus statistic to maintain in application code, and
 no Elasticsearch in the stack.
 """
 
@@ -61,7 +61,7 @@ class Embedder:
 
     One instance per process, deliberately. Two copies of the ONNX runtime and
     its weights would not fit beside each other inside 512 MB, and the second
-    copy buys nothing — embedding is CPU-bound on a tenth of a core, so
+    copy buys nothing - embedding is CPU-bound on a tenth of a core, so
     concurrency here is contention, not throughput.
     """
 

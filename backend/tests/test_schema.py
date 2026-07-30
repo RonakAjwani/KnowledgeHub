@@ -82,7 +82,7 @@ def test_verified_is_nullable() -> None:
 
 
 def test_scores_are_nullable() -> None:
-    """rerank_score is None when rerank was skipped or failed — never 0.0, which
+    """rerank_score is None when rerank was skipped or failed - never 0.0, which
     would read as "the reranker judged this irrelevant"."""
     assert MessageCitation.__table__.c.rerank_score.nullable is True
     assert MessageCitation.__table__.c.fused_score.nullable is True
@@ -120,7 +120,7 @@ def test_related_spans_and_derived_flag_exist() -> None:
 
 def test_duplicate_upload_is_prevented_per_user_and_workspace_not_globally() -> None:
     """Re-uploading returns the existing document; two users uploading the same
-    public PDF are still two documents — and so are the same user's two
+    public PDF are still two documents - and so are the same user's two
     unrelated workspaces uploading it, since a workspace's whole point is an
     independent document set."""
     constraint = next(
@@ -199,14 +199,14 @@ def test_messages_persist_degradations() -> None:
 
 def test_workspace_id_is_nullable_on_documents_and_conversations() -> None:
     """Nullable, not required: a document or conversation from before workspaces
-    existed, or from a caller that never sets one, is still valid — just
+    existed, or from a caller that never sets one, is still valid - just
     ungrouped. I3 is still enforced by user_id regardless of workspace_id."""
     assert Document.__table__.c.workspace_id.nullable
     assert Conversation.__table__.c.workspace_id.nullable
 
 
 def test_workspace_foreign_keys_cascade_on_delete() -> None:
-    """Deleting a workspace must not strand its documents or conversations —
+    """Deleting a workspace must not strand its documents or conversations -
     they either go with it or the delete has to fail; leaving them behind with
     a dangling workspace_id is the one outcome nothing should produce."""
     for table, column in ((Document, "workspace_id"), (Conversation, "workspace_id")):
@@ -215,7 +215,7 @@ def test_workspace_foreign_keys_cascade_on_delete() -> None:
 
 
 def test_workspace_scoped_dedup_lets_the_same_file_live_in_two_workspaces() -> None:
-    """The same PDF can legitimately belong to two unrelated workspaces — a
+    """The same PDF can legitimately belong to two unrelated workspaces - a
     style guide referenced from two different projects should be two rows, not
     one document silently reparented between them."""
     constraint = next(

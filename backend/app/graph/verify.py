@@ -1,4 +1,4 @@
-"""G4 — claim-level citation verification, off the request path.
+"""G4 - claim-level citation verification, off the request path.
 
 Three fixes carried from the reference project, each of which was a measured
 failure there rather than a theoretical one:
@@ -15,11 +15,11 @@ failure there rather than a theoretical one:
 
 And the invariant that governs the whole module: **a failed judge yields ``None``,
 never ``False`` (I2).** A dead verifier must not be indistinguishable from
-"citations unsupported" — the second is a finding, the first is an absence of one.
+"citations unsupported" - the second is a finding, the first is an absence of one.
 
 This runs **after** the answer has streamed. Putting it on the request path was
 the reference project's latency tax on every answer, and the UX bar here is
-NotebookLM — verdicts patch citation chips in afterwards, or never arrive at all.
+NotebookLM - verdicts patch citation chips in afterwards, or never arrive at all.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # Models emit CJK lenticular 【1】, fullwidth ［1］, and tortoise 〔1〕 brackets,
 # not just ASCII. Missing this alone scored correctly-cited answers as 0.0
-# citation accuracy on the reference project's first run — the answers were
+# citation accuracy on the reference project's first run - the answers were
 # right, the extractor simply could not see the markers.
 CITATION_MARKER_RE = re.compile(r"[\[［【〔❨❪⟦]\s*(\d+)\s*[\]］】〕❩❫⟧]")
 
@@ -93,7 +93,7 @@ def split_claims(answer: str) -> list[Claim]:
         if not line:
             continue
         # Strip list bullets so the sentence reads naturally to the judge.
-        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", line)
+        line = re.sub(r"^\s*(?:[-**]|\d+[.)])\s+", "", line)
         for sentence in _SENTENCE_SPLIT_RE.split(line):
             sentence = sentence.strip()
             if not sentence:
@@ -103,7 +103,7 @@ def split_claims(answer: str) -> list[Claim]:
             if not is_factual_claim(sentence):
                 # A fragment that is *only* markers is the citation for the
                 # sentence it follows. Models routinely place it after the
-                # terminator — "…as of July 2026. [1][3]" — and the sentence
+                # terminator - "...as of July 2026. [1][3]" - and the sentence
                 # splitter then hands the markers back as their own piece.
                 # Dropping it loses the citation and leaves the claim looking
                 # uncited, which is the same mispairing this module already
@@ -140,14 +140,14 @@ class Verifier:
     async def verify(
         self, answer: str, sources_by_marker: dict[int, str]
     ) -> VerificationResult:
-        """Check every cited claim. Never raises — an absent verdict is ``None``."""
+        """Check every cited claim. Never raises - an absent verdict is ``None``."""
         claims = split_claims(answer)
         cited = [c for c in claims if c.markers]
 
         if not claims:
             return VerificationResult(verdicts={}, coverage=None)
 
-        # Coverage counts factual claims only — discourse was filtered above.
+        # Coverage counts factual claims only - discourse was filtered above.
         coverage = len(cited) / len(claims) if claims else 0.0
 
         results = await asyncio.gather(
@@ -174,8 +174,8 @@ class Verifier:
         """One claim against the union of its cited sources."""
         texts = [sources[m] for m in claim.markers if m in sources]
         if not texts:
-            # Cites a marker that does not exist. Not a judgement about support —
-            # the model invented a reference — so it stays unknown here and is
+            # Cites a marker that does not exist. Not a judgement about support -
+            # the model invented a reference - so it stays unknown here and is
             # visible as a dangling citation elsewhere.
             return None
 
@@ -193,7 +193,7 @@ class Verifier:
             )
         except LLMError as exc:
             logger.warning("verification judge failed: %s", exc)
-            return None  # I2 — unknown, not unsupported
+            return None  # I2 - unknown, not unsupported
 
         supported = result.get("supported")
         return bool(supported) if isinstance(supported, bool) else None

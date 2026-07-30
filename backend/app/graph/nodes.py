@@ -1,16 +1,16 @@
 """The six pipeline nodes plus three terminals.
 
-Node names match the SSE contract exactly — ``route | rewrite | retrieve |
-rerank | grade | generate`` — because the client keys its progress UI on them.
+Node names match the SSE contract exactly - ``route | rewrite | retrieve |
+rerank | grade | generate`` - because the client keys its progress UI on them.
 Renaming one here silently breaks the frontend.
 
 **Every node that can fail has a named direction of failure**, and they are not
 all the same direction:
 
-* ``route`` and ``rewrite`` **fail open** — a dead classifier must never cause a
+* ``route`` and ``rewrite`` **fail open** - a dead classifier must never cause a
   refusal, and a dead rewriter must never lose the turn. Both degrade to the raw
   query and record why.
-* ``retrieve`` **cannot degrade as a whole** — retrieval is the product, so total
+* ``retrieve`` **cannot degrade as a whole** - retrieval is the product, so total
   failure is a 503. A *partial* failure is different: if the raw formulation
   succeeded and the rewritten one did not, the turn is answered from raw and
   recorded as degraded. Recall drops; the answer still happens.
@@ -111,7 +111,7 @@ async def route_node(state: QueryState, deps: Deps) -> dict:
     """Classify: needs retrieval / answerable from history / out of scope.
 
     **Tuned loose on purpose.** Over-refusal on a benign question is a far worse
-    failure than an unnecessary search — the user cannot tell a refusal from a
+    failure than an unnecessary search - the user cannot tell a refusal from a
     broken product. G2's relevance floor catches what this lets through, so this
     gate biases hard toward ``retrieve``.
     """
@@ -158,7 +158,7 @@ def _rewrite_failure_reason(exc: BaseException) -> DegradationReason:
     I1 is about a degraded path being *distinguishable*; a wrong label is its own
     kind of silence. Reporting a spent daily quota as a parse error sends whoever
     reads the degradation stream to fix the prompt, and reporting it as a timeout
-    sends them to raise the timeout — neither of which can help.
+    sends them to raise the timeout - neither of which can help.
     """
     if isinstance(exc, LLMTimeout | asyncio.TimeoutError):
         return DegradationReason.TIMEOUT
@@ -170,7 +170,7 @@ def _rewrite_failure_reason(exc: BaseException) -> DegradationReason:
 
 
 async def rewrite_node(state: QueryState, deps: Deps) -> dict:
-    """Resolve coreference — and fire the raw-query retrieval alongside it.
+    """Resolve coreference - and fire the raw-query retrieval alongside it.
 
     The parallelism is the whole point. Only ~60% of follow-up turns carry an
     unresolved reference, so on the rest the rewrite adds latency for nothing;
@@ -210,7 +210,7 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
     degradations = state.get("degradations", [])
 
     if isinstance(raw_candidates, BaseException):
-        # Not fatal here — `retrieve` decides whether the turn can proceed.
+        # Not fatal here - `retrieve` decides whether the turn can proceed.
         logger.warning("raw retrieval failed: %s", raw_candidates)
         updates["raw_candidates"] = []
     else:
@@ -236,7 +236,7 @@ async def rewrite_node(state: QueryState, deps: Deps) -> dict:
 
     updates["effective_queries"] = queries
     # Cohere takes one query, and the rerank cache is keyed on one string. For a
-    # multi-intent message the whole ask is the right thing to rerank against —
+    # multi-intent message the whole ask is the right thing to rerank against -
     # a chunk answering only one part should not outrank one covering two.
     updates["effective_query"] = queries[0] if len(queries) == 1 else raw_query
     updates["rewritten"] = queries != [raw_query]
@@ -310,7 +310,7 @@ def _to_candidate(point: ScoredPoint, settings: Settings) -> RetrievedChunk:
     """Build a candidate from a Qdrant hit.
 
     ``fused_score`` is normalised against the **analytic** ``RRF_MAX`` here, once,
-    at the boundary — so every consumer downstream is already on a scale where
+    at the boundary - so every consumer downstream is already on a scale where
     the G2 floor means the same thing on every query (I7). Normalising against
     the observed top score instead is the reference project's bug, and it looks
     identical in a diff.
@@ -350,12 +350,12 @@ async def _hydrate(
 
 
 async def retrieve_node(state: QueryState, deps: Deps) -> dict:
-    """Combine the two formulations — or skip the second call entirely."""
+    """Combine the two formulations - or skip the second call entirely."""
     raw_candidates = state.get("raw_candidates", [])
     attempt = state.get("attempt", 0)
 
     # Nothing to resolve, or the rewrite degraded: the raw set is the answer.
-    # Skipping here is the design working, not a shortcut — it avoids a Qdrant
+    # Skipping here is the design working, not a shortcut - it avoids a Qdrant
     # call on every first turn of every conversation.
     if not state.get("rewritten", False):
         if not raw_candidates and attempt == 0:
@@ -368,7 +368,7 @@ async def retrieve_node(state: QueryState, deps: Deps) -> dict:
             "attempt": attempt,
         }
 
-    # One search per effective query. Usually one — a resolved follow-up — but
+    # One search per effective query. Usually one - a resolved follow-up - but
     # several when the message asked distinct things, in which case retrieving
     # once for the blend surfaces passages answering only the loudest intent.
     queries = state.get("effective_queries") or [state["effective_query"]]
@@ -415,7 +415,7 @@ async def retrieve_node(state: QueryState, deps: Deps) -> dict:
     #
     # Several effective queries means the message asked several things. Their
     # answers are *supposed* to live in different places, so scoring by how many
-    # sub-queries found a chunk buries whatever answers only one of them — and
+    # sub-queries found a chunk buries whatever answers only one of them - and
     # the sub-question with the fewest supporting passages is precisely the one
     # at risk of going unanswered.
     if len(result_sets) > 1:
@@ -487,8 +487,8 @@ def applicable_floor(rerank_status: str, settings: Settings) -> float:
     """Cohere relevance and normalised RRF are different distributions.
 
     One shared floor across both is a bug: a number that means "good enough" on a
-    calibrated 0–1 cross-encoder scale means something else entirely on fused
-    ranks. ``failed`` degrades the score *source*, never the check itself — which
+    calibrated 0-1 cross-encoder scale means something else entirely on fused
+    ranks. ``failed`` degrades the score *source*, never the check itself - which
     closes the reference project's hole, where the gate ran only when rerank
     succeeded and a dead reranker meant no gate at all.
     """
@@ -567,7 +567,7 @@ def context_budget(state: QueryState, settings: Settings | None = None) -> int:
 
     Scales with the number of distinct things asked, because a three-part
     question served the usual top-5 can leave one part with no supporting
-    passage — and the model then answers two thirds of the question while
+    passage - and the model then answers two thirds of the question while
     sounding complete. Capped: the limit is attention, not context size.
     """
     cfg = settings or get_settings()
@@ -583,7 +583,7 @@ def fit_context(
     The chunk *count* cap is about model attention; this one is about the
     request actually being accepted. Twelve parents at up to ``parent_tokens``
     each is ~13k tokens, and Groq's free tier rejects anything over 12k with a
-    413 — not a 429, so no retry recovers it. Measured: 12,882 requested against
+    413 - not a 429, so no retry recovers it. Measured: 12,882 requested against
     a 12,000 limit, which failed exactly the multi-part questions that needed the
     most context.
 
@@ -592,7 +592,7 @@ def fit_context(
     matches the serving model's anyway.
 
     Returns the kept candidates and how many were dropped, so the caller can
-    record a degradation — a silently shortened context is a quality change
+    record a degradation - a silently shortened context is a quality change
     nobody can see (I1).
     """
     cfg = settings or get_settings()
@@ -644,7 +644,7 @@ def build_generate_messages(
 
 
 async def history_node(state: QueryState, deps: Deps) -> dict:
-    """Answer from conversation state — no retrieval round trip."""
+    """Answer from conversation state - no retrieval round trip."""
     transcript = "\n".join(
         f"{t['role']}: {t['content']}" for t in state.get("recent_turns", [])
     )
@@ -676,7 +676,7 @@ async def history_node(state: QueryState, deps: Deps) -> dict:
 async def refuse_node(state: QueryState, deps: Deps) -> dict:
     return {
         "answer": (
-            "That is outside what I can help with here — I answer questions about "
+            "That is outside what I can help with here - I answer questions about "
             "the documents you have uploaded."
         ),
         "citations": [],

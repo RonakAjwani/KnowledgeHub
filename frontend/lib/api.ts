@@ -66,6 +66,67 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+function parseFilenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  // The backend always quotes it (documents.py's download_document sets
+  // `Content-Disposition: attachment; filename="{document.filename}"`).
+  const match = /filename="([^"]+)"/.exec(header);
+  return match ? match[1] : null;
+}
+
+/**
+ * Binary download, not `request<T>` - that helper always calls `.json()`,
+ * which would try to parse a PDF's bytes as JSON and throw.
+ */
+async function fetchBlob(
+  path: string,
+  token?: string | null,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try {
+      body = (await response.json()) as ApiErrorBody;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(
+      response.status,
+      body?.error.code ?? "dependency_unavailable",
+      body?.error.message ?? `Request failed with ${response.status}`,
+      body?.error.request_id,
+    );
+  }
+
+  const blob = await response.blob();
+  return {
+    blob,
+    filename: parseFilenameFromDisposition(
+      response.headers.get("content-disposition"),
+    ),
+  };
+}
+
+/**
+ * A plain `<a href>` can't carry the Clerk bearer token, so a real download
+ * has to fetch the bytes itself and click a throwaway object-URL anchor.
+ */
+export function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Deferred, not immediate: revoking synchronously can race the browser's
+  // own handling of the click on some engines.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export const api = {
   listDocuments: (workspaceId?: string | null, token?: string | null) =>
     request<DocumentSummary[]>(
@@ -79,7 +140,7 @@ export const api = {
 
   /**
    * Upload returns 201 for a new document and **200 with the existing one** when
-   * the same bytes were already uploaded — re-uploading is not an error. The
+   * the same bytes were already uploaded - re-uploading is not an error. The
    * same bytes uploaded into a *different* workspace is a distinct document,
    * though: the dedup key includes `workspace_id`, so this never silently
    * reparents a file that already lives somewhere else.
@@ -101,6 +162,9 @@ export const api = {
 
   deleteDocument: (id: string, token?: string | null) =>
     request<void>(`/documents/${id}`, { method: "DELETE" }, token),
+
+  downloadDocumentBlob: (id: string, token?: string | null) =>
+    fetchBlob(`/documents/${id}/blob`, token),
 
   listConversations: (workspaceId?: string | null, token?: string | null) =>
     request<Conversation[]>(
@@ -138,7 +202,7 @@ export const api = {
 
   /**
    * The disconnect-recovery path. The stream is not resumable by design, so a
-   * client that dropped mid-turn refetches final state — including verification
+   * client that dropped mid-turn refetches final state - including verification
    * verdicts that landed after it stopped listening.
    */
   getMessage: (id: string, token?: string | null) =>

@@ -1,26 +1,26 @@
-"""Nested RRF across *formulations* — the one place client-side fusion survives.
+"""Nested RRF across *formulations* - the one place client-side fusion survives.
 
 The project rule is that dense↔sparse fusion happens server-side, because Qdrant
 does it in a single call with per-branch weights and doing it in application code
 would be reimplementing a solved problem badly. That rule is about fusion *within*
 a query.
 
-This module fuses *across* queries — the raw formulation and the rewritten one —
+This module fuses *across* queries - the raw formulation and the rewritten one -
 and the server cannot do that at all, because the two were never in the same
 request. Scoped precisely:
 
     Fusion within a query is server-side. Fusion across queries is client-side,
     and only here.
 
-The alternative — waiting for the rewrite, then issuing all four branches as
-prefetches in one call — is server-side throughout, but it puts the rewrite back
+The alternative - waiting for the rewrite, then issuing all four branches as
+prefetches in one call - is server-side throughout, but it puts the rewrite back
 on the critical path, which is the entire thing the parallelism buys. So the one
 surviving client-side merge is the one that is actually load-bearing.
 
 **Same normalisation discipline as everywhere else (I7).** The fused score here is
 scaled by an analytic maximum derived from constants, never by the observed top
 score of the merged set. Self-normalising would force ``max == 1.0`` on every
-query and make the downstream floor meaningless — the exact failure the reference
+query and make the downstream floor meaningless - the exact failure the reference
 project shipped.
 """
 
@@ -58,7 +58,7 @@ def fuse_formulations(
     which is the property that made RRF the right choice for the inner fusion too.
 
     Chunks carry their **best** rank from either branch, so a chunk found by the
-    rewritten query alone is not penalised for being absent from the raw one — it
+    rewritten query alone is not penalised for being absent from the raw one - it
     simply scores the single contribution.
     """
     non_empty = [rs for rs in result_sets if rs]
@@ -104,7 +104,7 @@ def interleave_intents(
 
     RRF is the wrong operator here, and quietly so. It rewards a chunk for
     appearing in many result sets, which is exactly right when the sets are
-    rephrasings of one intent — agreement is evidence. When the sets are distinct
+    rephrasings of one intent - agreement is evidence. When the sets are distinct
     sub-questions, agreement means almost nothing and *disagreement is expected*:
     the passage answering the third sub-question appears in the third result set
     and nowhere else, so RRF scores it once against rivals scoring two and three
@@ -121,7 +121,7 @@ def interleave_intents(
     best passage, and every intent reaches the model as long as the budget has
     slots for it.
 
-    ``tail`` is appended after the interleave, deduplicated — normally the raw
+    ``tail`` is appended after the interleave, deduplicated - normally the raw
     whole-message results, which stay available without being allowed to crowd
     out any single intent.
 
@@ -167,7 +167,7 @@ def attach_branch_ranks(
     """Record each chunk's position within each branch.
 
     The conditional-rerank skip needs to know whether the fused winner is top-3 in
-    *both* branches — cross-branch agreement, not margin, is the signal that a
+    *both* branches - cross-branch agreement, not margin, is the signal that a
     cross-encoder would not overturn the result. A single fused call does not
     report per-branch positions, so they are attached from the branch queries the
     ablation harness runs anyway.

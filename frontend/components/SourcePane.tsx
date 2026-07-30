@@ -1,17 +1,19 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@clerk/nextjs";
 import {
-  FileText,
+  Download,
   LoaderCircle,
   PanelRight,
   TriangleAlert,
   WandSparkles,
+  X,
 } from "lucide-react";
 
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, triggerBrowserDownload } from "@/lib/api";
+import { fileKind } from "@/lib/fileKind";
 import { CLERK_ENABLED, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,7 +36,7 @@ function useNoToken(): TokenGetter {
  * Clerk's `useAuth` throws outside a `ClerkProvider`, and a build with no
  * publishable key mounts no provider at all (see `CLERK_ENABLED`). Resolving the
  * branch once at module scope keeps hook order fixed for the lifetime of the
- * process — a conditional call inside the component would not.
+ * process - a conditional call inside the component would not.
  */
 const useSessionToken: () => TokenGetter = CLERK_ENABLED
   ? useClerkToken
@@ -56,7 +58,7 @@ interface Span {
 /**
  * Locate the model-generated runs in `normalized_text`.
  *
- * This scans for a delimiter the builder itself wrote — it is not a search for
+ * This scans for a delimiter the builder itself wrote - it is not a search for
  * cited text. Citation positions come from offsets and only from offsets; see
  * `buildSegments`.
  *
@@ -104,7 +106,7 @@ function clamp(value: number, low: number, high: number): number {
 /**
  * Cut the document at every boundary that matters, then flag each piece.
  *
- * The highlight is applied purely by offset — `text.slice(start, end)` — because
+ * The highlight is applied purely by offset - `text.slice(start, end)` - because
  * the offsets are authoritative (I5: they index `normalized_text`). Searching
  * for the cited string instead would land on the wrong occurrence the first time
  * a phrase repeats, and would silently disagree with the verifier.
@@ -157,12 +159,16 @@ export interface SourcePaneProps {
   documentId: string | null;
   /** Citation offsets into this document's `normalized_text`. */
   highlight: { char_start: number; char_end: number } | null;
+  /** Present when this pane is a slide-over rather than the permanent
+   * "nothing open yet" placeholder - renders a close button in the header. */
+  onClose?: () => void;
   className?: string;
 }
 
 export function SourcePane({
   documentId,
   highlight,
+  onClose,
   className,
 }: SourcePaneProps) {
   const getToken = useSessionToken();
@@ -170,6 +176,9 @@ export function SourcePane({
   useEffect(() => {
     tokenRef.current = getToken;
   }, [getToken]);
+
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const documentQuery = useQuery({
     queryKey: ["document", documentId],
@@ -180,6 +189,27 @@ export function SourcePane({
     // string"), so a fetched document cannot go stale while it is open.
     staleTime: 5 * 60_000,
   });
+
+  const filename = documentQuery.data?.filename ?? null;
+
+  const download = useCallback(async () => {
+    if (!documentId) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const { blob, filename: blobFilename } = await api.downloadDocumentBlob(
+        documentId,
+        await tokenRef.current(),
+      );
+      triggerBrowserDownload(blob, blobFilename ?? filename ?? "document");
+    } catch (error) {
+      setDownloadError(
+        error instanceof ApiError ? `${error.message} (${error.code})` : "Download failed",
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }, [documentId, filename]);
 
   const text = documentQuery.data?.normalized_text ?? "";
 
@@ -241,35 +271,65 @@ export function SourcePane({
     );
   }
 
+  const kind = fileKind(filename ?? "", documentQuery.data?.mime ?? "");
+
   return (
     <Card className={cn("h-full min-h-0", className)}>
       <CardHeader className="flex-col items-stretch gap-2">
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <FileText className="size-3.5 shrink-0 text-zinc-400 dark:text-zinc-500" />
-            <CardTitle className="truncate">
-              {documentQuery.data?.filename ?? "Source"}
-            </CardTitle>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-md", kind.swatchClassName)}>
+              <kind.Icon className="size-3.5" aria-hidden />
+            </span>
+            <CardTitle className="truncate">{filename ?? "Source"}</CardTitle>
+            {documentQuery.isFetching && (
+              <LoaderCircle className="size-3.5 shrink-0 animate-spin text-zinc-400" />
+            )}
           </div>
-          {documentQuery.isFetching && (
-            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-zinc-400" />
-          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {documentQuery.isSuccess && (
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Download"
+                aria-label="Download original file"
+                disabled={downloading}
+                onClick={() => void download()}
+              >
+                {downloading ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+              </Button>
+            )}
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close source"
+                className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
+              >
+                <X className="size-4" aria-hidden />
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
           {documentQuery.data && (
             <>
-              <Badge variant="outline">
-                {documentQuery.data.chunk_count} chunks
-              </Badge>
-              <Badge variant="outline">
-                {text.length.toLocaleString("en-US")} chars
-              </Badge>
+              <Badge variant="outline">{kind.label}</Badge>
+              {downloadError && (
+                <span className="text-xs text-red-600 dark:text-red-400">
+                  {downloadError}
+                </span>
+              )}
             </>
           )}
           {highlight && !highlightOutOfRange && (
             <Badge variant="info">
-              cited {highlight.char_start.toLocaleString("en-US")}–
+              cited {highlight.char_start.toLocaleString("en-US")}-
               {highlight.char_end.toLocaleString("en-US")}
             </Badge>
           )}
@@ -285,7 +345,7 @@ export function SourcePane({
       {documentQuery.isPending && (
         <div className="flex flex-1 items-center justify-center gap-2 p-8 text-xs text-zinc-500 dark:text-zinc-400">
           <LoaderCircle className="size-3.5 animate-spin" />
-          Loading document…
+          Loading document...
         </div>
       )}
 
@@ -313,11 +373,11 @@ export function SourcePane({
       {documentQuery.isSuccess && (
         <div className="flex min-h-0 flex-1 flex-col">
           {highlightOutOfRange && (
-            <p className="flex items-start gap-1.5 border-b border-amber-300 bg-amber-50 px-4 py-2 text-[11px] leading-4 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+            <p className="flex items-start gap-1.5 border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs leading-5 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
               <TriangleAlert className="mt-px size-3 shrink-0" />
               <span>
                 This citation points at characters{" "}
-                {highlight?.char_start.toLocaleString("en-US")}–
+                {highlight?.char_start.toLocaleString("en-US")}-
                 {highlight?.char_end.toLocaleString("en-US")}, outside this
                 document&rsquo;s {text.length.toLocaleString("en-US")}-character
                 text. It was recorded against a different build and the
@@ -327,14 +387,14 @@ export function SourcePane({
           )}
 
           {documentQuery.data.status !== "ready" && (
-            <p className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-[11px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
-              Ingest is still at &ldquo;{documentQuery.data.status}&rdquo; — this
+            <p className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
+              Ingest is still at &ldquo;{documentQuery.data.status}&rdquo;. This
               text may be incomplete.
             </p>
           )}
 
           {hasDerived && (
-            <p className="flex items-start gap-1.5 border-b border-zinc-200 px-4 py-2 text-[11px] leading-4 text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+            <p className="flex items-start gap-1.5 border-b border-zinc-200 px-4 py-2 text-xs leading-5 text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
               <WandSparkles className="mt-px size-3 shrink-0 text-amber-600 dark:text-amber-400" />
               <span>
                 Amber passages are a model&rsquo;s description of a figure, not
@@ -343,13 +403,22 @@ export function SourcePane({
             </p>
           )}
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
             {text.length === 0 ? (
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 This document has no extracted text.
               </p>
             ) : (
-              <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-6 text-zinc-800 dark:text-zinc-200">
+              // Proportional font and document-width measure, not the monospace
+              // code-block look this used before - reads like the document
+              // rather than a raw text dump. Still `whitespace-pre-wrap` and
+              // still exactly `normalized_text`: the offsets highlighting
+              // depends on (I5) index this string precisely as extracted, and
+              // reflowing PDF line-wrap artifacts would need the parser to mark
+              // which single line breaks are wrapped prose versus a real list
+              // or table row - data the frontend does not have, so this only
+              // changes typography, not the characters shown.
+              <pre className="mx-auto max-w-[42rem] whitespace-pre-wrap break-words font-sans text-[15px] leading-7 text-zinc-800 dark:text-zinc-200">
                 {segments.map((segment, index) => {
                   const body = text.slice(segment.start, segment.end);
 

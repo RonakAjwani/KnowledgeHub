@@ -1,20 +1,20 @@
-"""Graph wiring — bounded CRAG, one corrective retry, no autonomy.
+"""Graph wiring - bounded CRAG, one corrective retry, no autonomy.
 
 LangGraph is here for two things it does well: **checkpointing** (needed for
 multi-turn state anyway) and **node-level event streaming** (which drives the
-progressive "searching 12 sources → found 5" UI). It is emphatically *not* here
+progressive "searching 12 sources -> found 5" UI). It is emphatically *not* here
 for autonomy. The control flow is fixed, the branches are conditional edges, and
 the loop is bounded by a counter:
 
     route ─┬─ history ──────────────────────────► END
            ├─ refuse ───────────────────────────► END
-           └─ rewrite → retrieve → rerank → grade ─┬─ pass ──► generate ► END
+           └─ rewrite -> retrieve -> rerank -> grade ─┬─ pass ──► generate ► END
                           ▲                        ├─ retry ─► retry_node ─┘
-                          └────────────────────────┘         (attempt 0 → 1)
+                          └────────────────────────┘         (attempt 0 -> 1)
                                                    └─ abstain ► END
 
 Worst case is two retrievals, never N. Most agentic-RAG tutorials make one LLM
-grading call *per retrieved document* — five documents, five extra serial calls —
+grading call *per retrieved document* - five documents, five extra serial calls -
 and this graph makes zero, because the reranker's score already is the grade.
 
 The checkpointer is in-memory and per-turn. Durable conversation state lives in

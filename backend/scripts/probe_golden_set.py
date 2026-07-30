@@ -2,7 +2,7 @@
 
 Run this before spending a single generation token. Every expected substring in
 ``evals.questions`` is checked against the ``normalized_text`` the pipeline
-actually produced — the same string chunk offsets index into (I5), so this is
+actually produced - the same string chunk offsets index into (I5), so this is
 the text the model can possibly see, not the PDF a human reads.
 
 The distinction it buys is the one that matters when a score comes back at 60%:
@@ -10,7 +10,7 @@ The distinction it buys is the one that matters when a score comes back at 60%:
     string absent from every document   the *question* is wrong, or parsing
                                         dropped the fact. Retrieval cannot be
                                         blamed and tuning it is wasted effort.
-    string present, question failed     a real pipeline failure — retrieval,
+    string present, question failed     a real pipeline failure - retrieval,
                                         ranking or generation.
 
 Without this, both look identical in the results table, and the first one reads
@@ -74,7 +74,7 @@ async def main() -> int:
         if d.filename in BY_FILENAME
     }
     if not text_by_key:
-        print("no corpus ingested — run scripts/ingest_corpus.py --reset")
+        print("no corpus ingested - run scripts/ingest_corpus.py --reset")
         return 1
 
     sizes = ", ".join(f"{k} ({len(v):,} chars)" for k, v in sorted(text_by_key.items()))
@@ -129,7 +129,7 @@ async def main() -> int:
             misplaced.append(f"{question.id}:{needle}")
             print(f"      {needle!r} is in {where}, question declares {list(question.docs)}")
             for window in _windows(needle, text_by_key[where[0]]):
-                print(f"        … {window} …")
+                print(f"        ... {window} ...")
 
     print()
     for question in QUESTIONS:
@@ -140,7 +140,7 @@ async def main() -> int:
     print("\n" + "=" * 60)
     if broken:
         print(f"{len(broken)} expected fact(s) absent from the corpus: {broken}")
-        print("These questions cannot be passed. Fix the question or the parser —")
+        print("These questions cannot be passed. Fix the question or the parser -")
         print("do not tune retrieval against them.")
     else:
         print("every expected fact is present in normalized_text")

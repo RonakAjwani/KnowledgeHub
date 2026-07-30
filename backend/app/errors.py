@@ -11,7 +11,7 @@ trace and the caller cannot.
 
 One deliberate deviation from framework defaults, because the taxonomy and FastAPI
 disagree about 422: FastAPI returns 422 for request-body validation failures, but
-this contract reserves 422 for ``document_not_ready`` — querying a document that
+this contract reserves 422 for ``document_not_ready`` - querying a document that
 has not finished ingesting. Validation failures are 400 ``invalid_request`` here,
 so ``RequestValidationError`` is remapped below. Leaving the default in place would
 make "your JSON is malformed" and "your document is still embedding" indistinguishable
@@ -89,7 +89,7 @@ class UnsupportedMediaType(AppError):
 
 
 class DocumentNotReady(AppError):
-    """Queried before status == ready. Not a validation failure — see module docstring."""
+    """Queried before status == ready. Not a validation failure - see module docstring."""
 
     status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     code = "document_not_ready"
@@ -163,7 +163,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         headers = {}
         if isinstance(exc, RateLimited):
             headers["Retry-After"] = str(exc.retry_after)
-        # Deliberate errors are expected control flow, not incidents — log at
+        # Deliberate errors are expected control flow, not incidents - log at
         # warning without a traceback so real faults stay visible in the noise.
         logger.warning(
             "app_error code=%s status=%s request_id=%s message=%s",
@@ -180,7 +180,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
-        # Remapped from FastAPI's default 422 to 400 — see module docstring.
+        # Remapped from FastAPI's default 422 to 400 - see module docstring.
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content=error_body(

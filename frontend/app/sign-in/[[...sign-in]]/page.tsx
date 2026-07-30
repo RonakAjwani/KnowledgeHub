@@ -1,12 +1,10 @@
-import { SignIn } from "@clerk/nextjs";
-
 import { AuthShell } from "@/components/AuthShell";
-import { clerkAppearance } from "@/lib/clerk-appearance";
+import { ThemedClerkForm } from "@/components/ThemedClerkForm";
 import { CLERK_ENABLED } from "@/lib/utils";
 
 export default function SignInPage() {
   // `<SignIn>` needs a mounted `<ClerkProvider>`, which `Providers` only
-  // mounts when a publishable key is configured — without one this route is
+  // mounts when a publishable key is configured - without one this route is
   // unreachable through the app's own middleware (AUTH_MODE=dev never
   // redirects here), but a direct visit would otherwise hard-crash with a 500
   // rather than explain itself.
@@ -26,7 +24,7 @@ export default function SignInPage() {
 
   return (
     <AuthShell>
-      <SignIn appearance={clerkAppearance} />
+      <ThemedClerkForm mode="sign-in" />
     </AuthShell>
   );
 }

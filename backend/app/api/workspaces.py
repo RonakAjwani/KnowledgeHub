@@ -1,9 +1,9 @@
-"""Workspaces — a named group of documents that many conversations share.
+"""Workspaces - a named group of documents that many conversations share.
 
 The point is upload-once: a user attaches documents to a workspace and every
 chat opened inside it retrieves against that same set with no re-upload. This
 is the frontend's primary organising unit (its own "project"), but it is
-optional at the API level — `POST /chat` and `POST /documents` both still work
+optional at the API level - `POST /chat` and `POST /documents` both still work
 without a `workspace_id`, they just leave the row ungrouped. Nothing downstream
 of ingest or retrieval reads `workspace_id`; it is purely a grouping label
 resolved into `selected_doc_ids` before the query graph ever runs.
@@ -43,7 +43,7 @@ def _serialise(workspace: db.Workspace, *, document_count: int, conversation_cou
 async def _owned(session: AsyncSession, user_id: str, workspace_id: str) -> db.Workspace:
     """Fetch scoped by user_id (I3).
 
-    404, not 403, for a workspace belonging to someone else — a 403 would
+    404, not 403, for a workspace belonging to someone else - a 403 would
     confirm the id exists, which is an enumeration oracle.
     """
     workspace = await session.get(db.Workspace, workspace_id)
@@ -121,11 +121,11 @@ async def delete_workspace(
     """Delete a workspace and everything scoped to it.
 
     Documents are deleted through :meth:`IngestPipeline.delete` one at a time
-    rather than left to the database's ``ON DELETE CASCADE`` — the cascade only
+    rather than left to the database's ``ON DELETE CASCADE`` - the cascade only
     knows about Postgres, and a document deleted that way would leave its
     vectors orphaned in Qdrant with nothing to ever clean them up. Conversations
-    have no such external store, so their cascade (`conversations` →
-    `messages` → `message_citations`) is left to the database.
+    have no such external store, so their cascade (`conversations` ->
+    `messages` -> `message_citations`) is left to the database.
     """
     await _owned(session, user_id, workspace_id)
 

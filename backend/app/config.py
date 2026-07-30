@@ -6,7 +6,7 @@ env-overridable. Two rules govern this file:
 1.  Constants marked ``UNRESOLVED`` are placeholders, not decisions. They cannot be
     chosen without a corpus (see "Deliberately unresolved" in the vault index), so
     they are wired now and set in the tuning pass. Do not treat the current values
-    as tuned, and do not quietly "improve" one because it looks arbitrary — it is
+    as tuned, and do not quietly "improve" one because it looks arbitrary - it is
     arbitrary, deliberately, and changing it without measurement is guessing.
 
 2.  ``rrf_max`` is *computed from configuration*, never from retrieved data. This
@@ -26,7 +26,7 @@ from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Per-role model ids for each provider. Verified against the live APIs rather
-# than recalled — guessing ids from a training prior is exactly how this breaks.
+# than recalled - guessing ids from a training prior is exactly how this breaks.
 # The 2.0-era Gemini ids these defaults originally held are dead:
 # `gemini-2.5-flash` 404s ("model is not found") and `gemini-2.0-flash` returns
 # 429 with no usable free-tier quota.
@@ -48,18 +48,18 @@ MODELS_BY_PROVIDER: dict[str, dict[str, str | None]] = {
         "vlm": "gemini-3.6-flash",
     },
     # Confirmed 200 on 2026-07-28. Far more headroom than Gemini's free tier and
-    # markedly faster — 70b-versatile answered in 0.19s against flash-lite's ~1s.
+    # markedly faster - 70b-versatile answered in 0.19s against flash-lite's ~1s.
     # Generation stays on llama-3.3-70b-versatile because it is *not* a
     # reasoning model. gpt-oss-120b has more daily headroom and was tried, but it
     # spends the output budget on internal reasoning before emitting anything
-    # and returned an empty answer at 2048 — a reasoning model behind a fixed
+    # and returned an empty answer at 2048 - a reasoning model behind a fixed
     # output cap fails as silence, which is the worst possible failure here.
     #
     # The cost is a 100k tokens/day ceiling, separate from and invisible to the
     # per-minute headers: six runs of a six-question diagnostic exhausted it in
     # an afternoon. A daily cap cannot be paced around, so if generation starts
     # failing with 429s while the minute budget looks healthy, that is what
-    # happened. Mechanical roles sit on the 8b model — small prompts, own bucket.
+    # happened. Mechanical roles sit on the 8b model - small prompts, own bucket.
     "groq": {
         "route": "llama-3.1-8b-instant",
         "rewrite": "llama-3.1-8b-instant",
@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
 
     # Per-minute token ceilings, keyed by model id. MEASURED off Groq's own
-    # `x-ratelimit-limit-tokens` header on 2026-07-30, not assumed — the caps
+    # `x-ratelimit-limit-tokens` header on 2026-07-30, not assumed - the caps
     # differ per model and each model meters its own bucket.
     #
     # A model absent from this table is not paced. Guessing a ceiling for a
@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     llm_model_generate: str = ""
     # Used only when the primary is rate limited or out of quota. Free tiers
     # meter per *day* on the strongest model, so without this a demo simply
-    # stops answering once that number is reached — a hard 503 where a visibly
+    # stops answering once that number is reached - a hard 503 where a visibly
     # degraded answer from a smaller model is obviously better (I1).
     llm_model_generate_fallback: str = ""
     llm_model_verify: str = ""
@@ -174,7 +174,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------- timeouts (§5)
     # Every external dependency has a timeout and a named fallback (I4). These
     # come straight from the contract's dependency table and are not tuning
-    # constants — they encode which stages may degrade and which may not.
+    # constants - they encode which stages may degrade and which may not.
     timeout_qdrant_s: float = 3.0  # -> 503, retrieval cannot degrade
     timeout_cohere_s: float = 2.0  # -> fused order, fail open
     timeout_llm_route_s: float = 2.0  # -> assume `retrieve`, fail open
@@ -196,12 +196,12 @@ class Settings(BaseSettings):
     # A chunk topping both branches with w=[1,1] and k=60 scores exactly
     # 0.03333333 = 2/60, not 2/61. The contract's written formula assumed
     # rank-from-1; the measurement disagrees, and the measurement wins.
-    # Re-run `scripts/probe_rrf_rank_base.py` after any Qdrant version bump —
+    # Re-run `scripts/probe_rrf_rank_base.py` after any Qdrant version bump -
     # a silent change here leaves every FLOOR_FUSED comparison quietly wrong.
     rrf_rank_base: Literal[0, 1] = 0
 
-    w_dense: float = Field(default=1.0, description="UNRESOLVED — needs corpus")
-    w_sparse: float = Field(default=1.0, description="UNRESOLVED — needs corpus")
+    w_dense: float = Field(default=1.0, description="UNRESOLVED - needs corpus")
+    w_sparse: float = Field(default=1.0, description="UNRESOLVED - needs corpus")
 
     retrieve_top_k: int = 40  # retrieve wide, compress late
     rerank_top_n: int = 5
@@ -216,14 +216,14 @@ class Settings(BaseSettings):
     #
     # Passing the usual top-5 for a three-part question risks one part getting
     # no supporting chunk at all, so the budget scales with the number of
-    # sub-queries — but only to a point. The binding constraint is *not* the
+    # sub-queries - but only to a point. The binding constraint is *not* the
     # context window (1M tokens; twelve parent windows is under 2% of it) but
     # attention: past a dozen passages a model gets measurably worse at using
     # any of them. See "When More Documents Hurt RAG" (arXiv 2606.11350).
     max_context_chunks: int = 12
 
     # Output budget for the answer, shared by the streaming and non-streaming
-    # generate paths — it was duplicated as a literal in both, which is how they
+    # generate paths - it was duplicated as a literal in both, which is how they
     # drift.
     #
     # Providers meter this as *reserved* output, so it is spent against the
@@ -231,7 +231,7 @@ class Settings(BaseSettings):
     # `max_context_tokens` has to be chosen against the sum. Reasoning models
     # (Gemini 3.x, gpt-oss) also emit internal reasoning from this budget before
     # any visible text, so a value too close to the expected answer length shows
-    # up as an answer that stops mid-sentence — which reads as a content failure
+    # up as an answer that stops mid-sentence - which reads as a content failure
     # rather than a token limit. Raise it, and lower the context budget to match,
     # if answers are being cut off.
     max_answer_tokens: int = 2048
@@ -239,14 +239,14 @@ class Settings(BaseSettings):
     # Ceiling on the DATA blocks, enforced separately from the chunk count. The
     # count cap is about model attention; this one is about the request being
     # accepted at all. Twelve parent windows at `parent_tokens` each is ~13k
-    # tokens, and Groq's free tier rejects anything over 12k TPM with a 413 —
+    # tokens, and Groq's free tier rejects anything over 12k TPM with a 413 -
     # measured at 12,882 requested against a 12,000 limit, which failed precisely
     # the multi-part questions that needed the most context.
     #
     # Sized against the whole request rather than the prompt alone: providers
     # meter `max_answer_tokens` as *reserved* output, so one call costs roughly
     # context + answer + overhead against the per-minute allowance. At 6000 that
-    # came to ~10.6k of 12k — room for barely one question a minute. 4000 brings
+    # came to ~10.6k of 12k - room for barely one question a minute. 4000 brings
     # it to ~8.5k and restores usable headroom, at little cost in evidence since
     # the reranker puts the load-bearing passages first.
     max_context_tokens: int = 4000
@@ -255,21 +255,21 @@ class Settings(BaseSettings):
     #
     # MEASURED 2026-07-29 off Groq's own rate-limit headers: the primary
     # (llama-3.3-70b-versatile) allows 12,000 tokens/minute, but the fallback
-    # (llama-3.1-8b-instant) allows only 6,000 — the safety net has *half* the
+    # (llama-3.1-8b-instant) allows only 6,000 - the safety net has *half* the
     # headroom of the thing it catches. A full-budget request is
     # `max_context_tokens` + `max_answer_tokens` + the system prompt and question
     # on top, so replaying the primary's prompt at 4000 + 2048 = 6048 exceeds the
-    # fallback's ceiling before overhead is even counted, and returns 413 — not
+    # fallback's ceiling before overhead is even counted, and returns 413 - not
     # 429, so no retry recovers it. The degraded path would fail exactly when it
     # is needed.
     #
     # 2000 leaves room for the answer and the prompt overhead inside 6,000. A
     # degraded answer from less context is the correct trade against no answer
     # at all, and the `degradation` event already tells the user which model
-    # replied (I1) — it now also means the context was trimmed.
+    # replied (I1) - it now also means the context was trimmed.
     max_context_tokens_fallback: int = 2000
 
-    # Skip the reranker when fusion is already decisive — DISABLED by default,
+    # Skip the reranker when fusion is already decisive - DISABLED by default,
     # because the premise turned out to be measurably false.
     #
     # The idea: when dense and sparse independently rank the same chunk first, a
@@ -294,7 +294,7 @@ class Settings(BaseSettings):
     #   1.20     1/53         100%           20%
     #
     # The reranker promotes a *different* top passage on ~3 of every 10 skipped
-    # queries, and top-5 overlap never exceeds 56% at any threshold — roughly
+    # queries, and top-5 overlap never exceeds 56% at any threshold - roughly
     # half the context set differs. Raising the ratio improves top-1 agreement
     # but shrinks the saving to nothing and makes overlap worse, because a
     # high-margin query has one dominant chunk and an arbitrary tail the
@@ -305,13 +305,13 @@ class Settings(BaseSettings):
     # stack and that skipping it costs nothing. This deployment will serve far
     # fewer than 1,000 queries, so the budget the skip protects does not bind,
     # and quality wins. Set to any value at or below ~1.30 to re-enable it for a
-    # deployment where the budget genuinely does bind — the table above is the
+    # deployment where the budget genuinely does bind - the table above is the
     # trade being bought. Note the skip is not the only budget protection:
     # exhaustion already falls back to fused order with a visible degradation.
     #
     # (Caveat kept deliberately: this measures *divergence* from the reranker,
     # not proof the reranker is right. The argument holds only because the
-    # design already asserts reranking improves ordering — that is why it is in
+    # design already asserts reranking improves ordering - that is why it is in
     # the stack and why FLOOR_RERANK trusts its scores.)
     decisive_ratio: float = 99.0
 
@@ -321,7 +321,7 @@ class Settings(BaseSettings):
     # MEASURED 2026-07-28 (`evals.run --retrieval-only`, 34 answerable + 13
     # should-decline questions on the reranked path). The sweep is deliberately
     # flat: every floor from 0.15 to 0.45 lands within one question of the
-    # optimum, so 0.35 is chosen as the middle of a plateau rather than a peak —
+    # optimum, so 0.35 is chosen as the middle of a plateau rather than a peak -
     # a knife-edge optimum on 47 questions would be a fit to this corpus, not a
     # threshold. Note the populations overlap heavily (answerable reaches down to
     # 0.064, should-decline up to 0.786): the floor is a backstop, and the
@@ -329,7 +329,7 @@ class Settings(BaseSettings):
     # questions.
     floor_rerank: float = 0.35
 
-    # RESOLVED as a *backstop*, not as a discriminator — and the distinction is
+    # RESOLVED as a *backstop*, not as a discriminator - and the distinction is
     # the whole point.
     #
     # MEASURED 2026-07-29 over all 53 eval questions
@@ -342,11 +342,11 @@ class Settings(BaseSettings):
     #   dense cosine, top 5            separation +0.72   best 81%
     #
     # In every one, the should-decline population sits *inside* the answerable
-    # range (for the shipped signal: answerable 0.662–0.876, decline
-    # 0.759–0.860). No threshold separates them: at 0.65 the gate never fires, at
+    # range (for the shipped signal: answerable 0.662-0.876, decline
+    # 0.759-0.860). No threshold separates them: at 0.65 the gate never fires, at
     # 0.80 it trades 7 answerable questions for 7 declines, and at 0.85 it
     # rejects 33 of 39 answerable ones. This is not a signal-quality problem to
-    # be fixed by picking a different score — an earlier note in this file
+    # be fixed by picking a different score - an earlier note in this file
     # claimed dense cosine was the fix, and the measurement above disproves it.
     #
     # The cause is that unanswerable questions in the bank are *topically
@@ -358,14 +358,14 @@ class Settings(BaseSettings):
     #
     # So this is set below the entire observed answerable range: it fires only
     # on genuinely degenerate retrieval, and never arbitrates a close call it
-    # provably cannot judge. Over-refusal is the worse failure here — a user
+    # provably cannot judge. Over-refusal is the worse failure here - a user
     # cannot tell a refusal from a broken product.
     floor_fused: float = 0.50
 
     # ------------------------------------------------------------- chunking
-    child_tokens: int = Field(default=250, description="UNRESOLVED — needs corpus")
-    parent_tokens: int = Field(default=1200, description="UNRESOLVED — needs corpus")
-    embed_batch_size: int = Field(default=16, description="UNRESOLVED — measure RSS")
+    child_tokens: int = Field(default=250, description="UNRESOLVED - needs corpus")
+    parent_tokens: int = Field(default=1200, description="UNRESOLVED - needs corpus")
+    embed_batch_size: int = Field(default=16, description="UNRESOLVED - measure RSS")
     embed_model: str = "BAAI/bge-small-en-v1.5"
     fastembed_cache_dir: str = ".fastembed_cache"
 
@@ -380,16 +380,16 @@ class Settings(BaseSettings):
     # The direct lever on Tier-2 token cost: a page image is a flat 258 tokens
     # when both dimensions are <= 384 px and tiles upward from there. Too low and
     # tables are unreadable; too high and one document eats the TPM minute.
-    vlm_render_dpi: int = Field(default=150, description="UNRESOLVED — needs sample pages")
-    # The TPM backstop. Hitting it emits a degradation (I1) — never a silent truncation.
-    max_escalated_pages: int = Field(default=10, description="UNRESOLVED — needs corpus")
+    vlm_render_dpi: int = Field(default=150, description="UNRESOLVED - needs sample pages")
+    # The TPM backstop. Hitting it emits a degradation (I1) - never a silent truncation.
+    max_escalated_pages: int = Field(default=10, description="UNRESOLVED - needs corpus")
 
     # ---------------------------------------------------------------- memory
-    recent_turns_n: int = Field(default=5, description="UNRESOLVED — needs corpus")
+    recent_turns_n: int = Field(default=5, description="UNRESOLVED - needs corpus")
 
     # G1 is tuned loose on purpose: over-refusal on a benign query is the worse
     # failure, and G2's relevance floor catches what G1 lets through.
-    route_threshold: float = Field(default=0.5, description="UNRESOLVED — needs corpus")
+    route_threshold: float = Field(default=0.5, description="UNRESOLVED - needs corpus")
 
     # ------------------------------------------------------------- computed
     @model_validator(mode="after")
@@ -418,18 +418,18 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def rrf_max(self) -> float:
-        """The analytic ceiling of the weighted RRF score — never an observed max.
+        """The analytic ceiling of the weighted RRF score - never an observed max.
 
         A chunk ranked first in *both* branches scores
         ``(w_dense + w_sparse) / (k + rank_base)``. Because both terms are our own
         constants, the value is query-independent, which is the only reason
         ``floor_fused`` can mean the same thing on every query (I7).
 
-        ``rank_base`` is measured, not assumed — see the field's comment. On
+        ``rank_base`` is measured, not assumed - see the field's comment. On
         Qdrant 1.18 it is 0, so the denominator is ``k``.
 
         A chunk that tops one branch and is absent from the other lands near half
-        of this — real signal about one-sided evidence, and exactly the signal
+        of this - real signal about one-sided evidence, and exactly the signal
         per-query renormalisation destroys.
         """
         return (self.w_dense + self.w_sparse) / (self.rrf_k + self.rrf_rank_base)

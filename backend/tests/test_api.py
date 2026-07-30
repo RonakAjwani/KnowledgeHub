@@ -2,7 +2,7 @@
 
 The ordering tests are the load-bearing ones. A client builds its whole progress
 UI on these guarantees, and a stream that violates one fails in the browser
-rather than here — as a duplicated stage, a citation chip that never resolves, or
+rather than here - as a duplicated stage, a citation chip that never resolves, or
 a spinner that never stops.
 """
 
@@ -125,7 +125,7 @@ def test_upload_rejects_oversized_file(client, monkeypatch) -> None:
 
 
 def test_missing_document_is_404_not_403(client) -> None:
-    """A 403 would confirm the id exists — an enumeration oracle. Documents the
+    """A 403 would confirm the id exists - an enumeration oracle. Documents the
     caller does not own are reported as absent."""
     response = client.get("/documents/00000000-0000-0000-0000-000000000000")
     assert response.status_code == 404
@@ -217,7 +217,7 @@ async def test_stage_events_repeat_with_a_distinct_attempt_on_retry() -> None:
 
 async def test_citations_are_unverified_at_answer_complete() -> None:
     """I2: chips render unverified and upgrade in place. Never false at this
-    point — verification has not run yet."""
+    point - verification has not run yet."""
     runner = FakeRunner(
         [
             (
@@ -259,7 +259,7 @@ async def test_error_frame_carries_a_request_id() -> None:
 
 async def test_turn_start_carries_the_conversation_id() -> None:
     """Without it, a client that starts a fresh conversation never learns the id
-    the server minted — so every turn opens a new conversation and multi-turn
+    the server minted - so every turn opens a new conversation and multi-turn
     memory is unreachable even though the backend implements it."""
     runner = FakeRunner(
         [("turn.start", {"turn_id": "t", "message_id": "m", "conversation_id": "conv-1"})]

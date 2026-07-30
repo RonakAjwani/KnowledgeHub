@@ -1,6 +1,6 @@
 """Clerk JWT verification, reduced to the one thing the rest of the app needs: ``user_id``.
 
-Invariant I3 says ``user_id`` scopes everything — every Postgres query and every
+Invariant I3 says ``user_id`` scopes everything - every Postgres query and every
 Qdrant search carries it, and there is no unscoped read path. That invariant is
 only as good as its single source of truth, so this module is that source: nothing
 else in the codebase reads an ``Authorization`` header or a JWT claim.
@@ -11,13 +11,13 @@ Two modes:
     Returns a fixed subject. This exists so ``docker compose up`` brings the whole
     stack up on a clean clone with no Clerk account, which is what makes Compose a
     credible durable deliverable. It is refused at startup outside a local
-    environment — see :func:`assert_auth_mode_safe`.
+    environment - see :func:`assert_auth_mode_safe`.
 
 ``clerk``
     Real verification via ``clerk-backend-api``.
 
 API notes for this SDK version (3.3.1), confirmed against the installed package
-rather than remembered — the helpers moved out of ``clerk_backend_api.jwks_helpers``,
+rather than remembered - the helpers moved out of ``clerk_backend_api.jwks_helpers``,
 which no longer exists:
 
 * ``authenticate_request(request, options) -> RequestState`` lives at the package
@@ -50,7 +50,7 @@ def assert_auth_mode_safe(settings: Settings) -> None:
 
     ``AUTH_MODE=dev`` hands every caller the same ``user_id``, which would collapse
     every tenant into one. That is fine on a laptop and catastrophic anywhere else,
-    and the failure is silent — the app works, it just serves everyone the same
+    and the failure is silent - the app works, it just serves everyone the same
     documents. Fail loudly at boot instead.
     """
     if settings.auth_mode == "dev" and settings.app_env not in ("local", "docker"):
@@ -77,7 +77,7 @@ async def _verify_with_clerk(request: Request, settings: Settings) -> str:
     try:
         # Sync + network-bound; keep it off the event loop.
         state = await run_in_threadpool(authenticate_request, request, options)
-    except Exception as exc:  # noqa: BLE001 — any verification fault is a 401, not a 503
+    except Exception as exc:  # noqa: BLE001 - any verification fault is a 401, not a 503
         logger.warning("clerk verification raised: %s", exc)
         raise Unauthenticated("Could not verify the session token.") from exc
 

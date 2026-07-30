@@ -4,13 +4,13 @@
 by ``DECISIVE_RATIO`` *and* is top-3 in both branches. The placeholder was 1.5,
 carried over from a scale that does not exist here: RRF scores are
 ``w/(k + rank)``, so a top candidate ranked 0 in both branches scores
-``2/60 = 0.03333`` against a runner-up ranked 1 in both at ``2/61 = 0.03279`` —
+``2/60 = 0.03333`` against a runner-up ranked 1 in both at ``2/61 = 0.03279`` -
 a ratio of 1.017. A 1.5 threshold therefore only fires when the runner-up is
 missing from a branch entirely, and on the eval corpus it fired zero times in 53
 questions, meaning every query paid a Cohere call against a 1,000/month budget.
 
 This prints the observed margins so the constant is set from the distribution
-rather than from an unexamined default. Qdrant only — no Cohere, no LLM.
+rather than from an unexamined default. Qdrant only - no Cohere, no LLM.
 
     PYTHONPATH=. poetry run python scripts/probe_decisive_margin.py
 """

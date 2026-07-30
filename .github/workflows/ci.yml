@@ -6,13 +6,13 @@ name: CI
 # letting the integration tests skip themselves. Those ten tests are the only
 # ones that exercise the real write ordering (Qdrant first, then the Postgres
 # mirror), real hybrid search against a real collection, and the cascading
-# delete — skipping them would leave CI green while the parts most likely to
+# delete - skipping them would leave CI green while the parts most likely to
 # break in production went unexercised. `pytest.skip` on missing services is
 # right for a laptop; it is the wrong default for CI.
 #
 # What is deliberately NOT gated here: the eval suite (`evals/run.py`) and
 # `scripts/verify_api.py`. Both need live LLM and Cohere keys, and a CI job that
-# silently passes because a secret is unset is worse than no job at all — it
+# silently passes because a secret is unset is worse than no job at all - it
 # reports "tests pass" while testing nothing. They stay manual, and the README
 # says so.
 
@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   backend:
-    name: backend — lint, typecheck, test
+    name: backend - lint, typecheck, test
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -76,7 +76,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          # 3.12 is load-bearing, not incidental — see CLAUDE.md.
+          # 3.12 is load-bearing, not incidental - see CLAUDE.md.
           python-version: "3.12"
 
       - name: Install Poetry
@@ -130,7 +130,7 @@ jobs:
         run: poetry run pytest -q
 
   frontend:
-    name: frontend — lint, typecheck, build
+    name: frontend - lint, typecheck, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

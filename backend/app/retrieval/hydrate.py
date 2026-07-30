@@ -1,7 +1,7 @@
 """Refill retrieved candidates with their text from the Postgres mirror.
 
 The Qdrant payload deliberately carries only what is needed to *filter* and to
-*locate* a chunk — ``user_id``, ``doc_id``, ``chunk_id``, offsets, section, page.
+*locate* a chunk - ``user_id``, ``doc_id``, ``chunk_id``, offsets, section, page.
 It does not carry the chunk text, because duplicating every document into the
 vector store's payload would inflate a 1 GB free tier for no retrieval benefit.
 
@@ -9,9 +9,9 @@ Which means a candidate arrives from search with empty ``text`` and
 ``parent_text``, and two stages downstream silently produce nonsense if it stays
 that way:
 
-* **rerank** sends ``chunk.text`` to Cohere — blank documents rerank into noise
+* **rerank** sends ``chunk.text`` to Cohere - blank documents rerank into noise
   while still returning a confident-looking ordering;
-* **generate** wraps ``parent_text`` in DATA blocks — the model receives empty
+* **generate** wraps ``parent_text`` in DATA blocks - the model receives empty
   documents and correctly reports that it has no information, which reads to a
   user as "the system cannot find things that are obviously there".
 
@@ -62,7 +62,7 @@ async def hydrate_candidates(
     for candidate in candidates:
         row = rows.get(candidate.chunk.id)
         if row is None:
-            # A vector whose mirror row is gone — the recoverable half of the
+            # A vector whose mirror row is gone - the recoverable half of the
             # write ordering. Drop it rather than send an empty document
             # downstream, and say so, because a citation pointing at a missing
             # chunk is exactly what the ordering exists to prevent.

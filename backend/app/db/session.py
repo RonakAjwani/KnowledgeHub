@@ -5,10 +5,10 @@ says it may be restarted without notice, so a dropped connection is an *expected
 event* rather than an outage. The contract's §5 response is precise about the
 shape of the retry, and the precision is the point:
 
-* retry **once**, not with a backoff ladder — a second failure means the database
+* retry **once**, not with a backoff ladder - a second failure means the database
   is genuinely down, and spending the request's whole timeout budget rediscovering
   that helps nobody;
-* retry **only on connection-level errors** — never on a query that failed on its
+* retry **only on connection-level errors** - never on a query that failed on its
   merits. Re-running a statement that raised an integrity error just raises it
   again, and re-running one with side effects is worse than useless.
 
@@ -77,7 +77,7 @@ def is_connection_error(exc: BaseException) -> bool:
     """True only for faults where reconnecting could plausibly help.
 
     ``DBAPIError.connection_invalidated`` is SQLAlchemy's own verdict that the
-    connection — not the statement — is what went wrong, which is exactly the
+    connection - not the statement - is what went wrong, which is exactly the
     distinction the contract draws.
     """
     if isinstance(exc, InterfaceError):

@@ -9,8 +9,8 @@
  *
  * The parser is deliberately hand-rolled rather than pulled from a library: the
  * wire format is a dozen lines of the SSE spec, and the two behaviours that
- * matter here — treating `:` comment lines as keepalives rather than data, and
- * never buffering a partial frame across a chunk boundary — are exactly the
+ * matter here - treating `:` comment lines as keepalives rather than data, and
+ * never buffering a partial frame across a chunk boundary - are exactly the
  * behaviours a generic library tends to get subtly wrong.
  */
 
@@ -58,8 +58,8 @@ async function raiseForStatus(response: Response): Promise<void> {
 /**
  * Parse an SSE byte stream into `{ event, data }` pairs.
  *
- * Frames are separated by a blank line. A chunk boundary can fall anywhere —
- * including mid-frame or mid-UTF-8-character — so bytes are decoded with a
+ * Frames are separated by a blank line. A chunk boundary can fall anywhere -
+ * including mid-frame or mid-UTF-8-character - so bytes are decoded with a
  * streaming decoder and only complete frames are emitted. Emitting on chunk
  * arrival instead is the classic bug: it works until a token happens to straddle
  * a TCP segment, then silently truncates an answer.
@@ -89,7 +89,7 @@ async function* parseFrames(
         buffer = buffer.slice(boundary + 2);
         boundary = buffer.indexOf("\n\n");
 
-        // `: keepalive` — proof the connection is alive during a quiet stretch.
+        // `: keepalive` - proof the connection is alive during a quiet stretch.
         // Not data; skipping it is the whole point of the comment syntax.
         if (raw.startsWith(":")) continue;
 
@@ -125,7 +125,7 @@ export async function* streamChat(
     message: string;
     conversation_id?: string | null;
     /** Tags a brand-new conversation with the workspace it started in; ignored
-     * once `conversation_id` is set — a conversation cannot switch workspaces. */
+     * once `conversation_id` is set - a conversation cannot switch workspaces. */
     workspace_id?: string | null;
     selected_doc_ids?: string[] | null;
   },

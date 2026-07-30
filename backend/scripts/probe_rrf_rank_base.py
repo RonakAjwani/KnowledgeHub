@@ -1,4 +1,4 @@
-"""Settle whether Qdrant's RRF ranks from 0 or 1 — and therefore what RRF_MAX is.
+"""Settle whether Qdrant's RRF ranks from 0 or 1 - and therefore what RRF_MAX is.
 
 ``RRF_MAX`` is the analytic ceiling every un-reranked G2 threshold is measured
 against (invariant I7). For weighted RRF over two branches it is::
@@ -12,7 +12,7 @@ an empirical check rather than an assumption.
 
 The method is the contract's own: find a chunk that ranks **first in both
 branches independently**, then read its fused score. That score *is* ``RRF_MAX``,
-because a chunk cannot do better than topping every branch — so comparing it
+because a chunk cannot do better than topping every branch - so comparing it
 against the two candidate formulas settles the rank base directly.
 
 Run against a live Qdrant:
@@ -49,7 +49,7 @@ QUERY = "ZX9-4471 pressure valve coolant"
 
 async def main() -> int:
     # The URL comes from configuration, not a literal. This probe exists to be
-    # re-run against whatever Qdrant is actually in use — a managed cluster on a
+    # re-run against whatever Qdrant is actually in use - a managed cluster on a
     # different version can rank from a different base, and RRF_MAX together
     # with every threshold derived from it would silently mean nothing (I7).
     # Hardcoding localhost made the probe answer a question nobody asked: it
@@ -103,7 +103,7 @@ async def main() -> int:
         print(f"fused  #1: {fused[0].chunk_id}  score={fused[0].score:.8f}\n")
 
         if dense[0].chunk_id != sparse[0].chunk_id:
-            print("INCONCLUSIVE: no chunk topped both branches — adjust the corpus.")
+            print("INCONCLUSIVE: no chunk topped both branches - adjust the corpus.")
             return 2
         if fused[0].chunk_id != dense[0].chunk_id:
             print("INCONCLUSIVE: the both-branches winner is not the fused winner.")

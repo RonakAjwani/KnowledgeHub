@@ -1,7 +1,7 @@
 """Token counting, denominated in the embedding model's own tokenizer.
 
 Chunk sizes are expressed in tokens because that is the unit the retriever
-actually cares about — ``bge-small-en-v1.5`` truncates at 512 tokens, and a chunk
+actually cares about - ``bge-small-en-v1.5`` truncates at 512 tokens, and a chunk
 measured in characters sits at an unpredictable distance from that ceiling
 depending on how dense the document's vocabulary is. The reference project sized
 chunks in characters and the sizes drifted between documents as a result.

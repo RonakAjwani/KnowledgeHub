@@ -2,10 +2,10 @@
 
 Three stores exist in this system and they are kept apart deliberately:
 
-* the **document corpus** (Qdrant, per user) — retrieval;
-* **conversation state** (this module, Postgres, per conversation) — history,
+* the **document corpus** (Qdrant, per user) - retrieval;
+* **conversation state** (this module, Postgres, per conversation) - history,
   rewriting, summaries;
-* **user preferences** (Postgres, per user) — tone, defaults, pinned sources.
+* **user preferences** (Postgres, per user) - tone, defaults, pinned sources.
 
 Merging any two is how a stored preference ends up in a retrieval query and
 silently distorts every search a user makes. Preferences are a generation-time
@@ -17,7 +17,7 @@ the current turn into the summary that the current turn is being answered from.
 
 The entity ledger does double duty: it is conversational memory *and* the
 substitution source for coreference resolution in ``rewrite``. That is why it
-stores the literal earlier wording — resolving "the valve" to a paraphrase would
+stores the literal earlier wording - resolving "the valve" to a paraphrase would
 resolve the reference and destroy the exact-match retrieval that finds it.
 """
 
@@ -45,7 +45,7 @@ Return JSON only: {"summary": "<text>"}
 
 Fold the new turns into the existing summary. Keep it under 200 words. Preserve
 specific identifiers, file names, error codes and technical terms exactly as they
-appeared — they are how later questions get resolved. Drop pleasantries and
+appeared - they are how later questions get resolved. Drop pleasantries and
 anything superseded by a later turn.
 """
 
@@ -58,7 +58,7 @@ Include named things a follow-up might refer to indirectly: documents, systems,
 identifiers, error codes, people, metrics, tables and figures.
 
 Record the wording EXACTLY as it appeared. Do not normalise, expand, correct or
-paraphrase — the value is used for literal substitution, and a tidied-up version
+paraphrase - the value is used for literal substitution, and a tidied-up version
 would break the keyword search that finds it.
 
 Return at most 12 entities. Omit anything generic.
@@ -111,7 +111,7 @@ async def load_memory(
 
 
 def extract_identifiers(text: str) -> dict[str, str]:
-    """Local, free, and exact — no model involved.
+    """Local, free, and exact - no model involved.
 
     Identifiers are precisely what must survive a rewrite verbatim, and they are
     also the easiest thing to recognise without one. Running this unconditionally

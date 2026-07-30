@@ -1,9 +1,9 @@
-"""Drives one chat turn: graph → SSE events → persistence.
+"""Drives one chat turn: graph -> SSE events -> persistence.
 
 The node functions are called directly rather than through ``graph.ainvoke``.
 LangGraph would run the same sequence, but this loop needs to emit a
 ``pipeline.stage`` frame around each node *as it happens* and to stream tokens
-out of ``generate`` — and the value of LangGraph here was always checkpointing
+out of ``generate`` - and the value of LangGraph here was always checkpointing
 and node-level observability, never autonomy. Driving the nodes explicitly keeps
 the event contract exact and the control flow readable; the compiled graph
 remains the tested description of that same topology.
@@ -15,7 +15,7 @@ Ordering is the contract (§8) and is enforced structurally:
 * ``answer.delta`` only appears after ``pipeline.stage{generate, started}``;
 * ``pipeline.stage`` repeats on retry with a different ``attempt``, which is why
   the client keys on ``(node, attempt)`` rather than ``node``;
-* ``verification.complete`` may follow ``answer.complete`` — or never arrive.
+* ``verification.complete`` may follow ``answer.complete`` - or never arrive.
 
 **Degradations are emitted as they appear, not collected at the end.** A user
 watching a slow turn should learn that the reranker fell back at the moment it
@@ -68,7 +68,7 @@ class TurnRunner:
         #
         # `conversation_id` is what makes multi-turn memory reachable. A client
         # that starts a fresh conversation has no id to send, so the server mints
-        # one — and without it on the wire the client can never learn what it
+        # one - and without it on the wire the client can never learn what it
         # was, meaning every turn silently starts a new conversation and
         # follow-up questions lose their history.
         yield self.stream.frame(
@@ -170,7 +170,7 @@ class TurnRunner:
         ):
             yield frame
 
-        # -- retrieve → rerank → grade, with at most one corrective retry (I6)
+        # -- retrieve -> rerank -> grade, with at most one corrective retry (I6)
         while True:
             async for frame in self._stage("retrieve", state, nodes.retrieve_node):
                 yield frame
@@ -228,7 +228,7 @@ class TurnRunner:
             yield frame
 
     async def _retrieval_result(self, state: QueryState) -> str:
-        """The one stage event with a bespoke shape — the UI renders it directly."""
+        """The one stage event with a bespoke shape - the UI renders it directly."""
         candidates = state.get("candidates", [])
         by_doc: dict[str, int] = {}
         for candidate in candidates:
@@ -260,7 +260,7 @@ class TurnRunner:
         messages, chunk_ids = nodes.build_generate_messages(state)
         # Derived from what the prompt actually contained, rather than recomputed
         # from the same inputs. Two independent computations agreed only for as
-        # long as nothing else trimmed the context — the token budget now can,
+        # long as nothing else trimmed the context - the token budget now can,
         # and a citation list built from a different set than the DATA blocks
         # would silently point [n] at the wrong chunk.
         by_id = {c.chunk.id: c for c in state.get("candidates", [])}
@@ -284,7 +284,7 @@ class TurnRunner:
         except LLMRateLimited as exc:
             fallback = settings.llm_model_generate_fallback
             # Free tiers meter the strongest model per *day*, and no amount of
-            # waiting inside one request recovers that — so the choice is a
+            # waiting inside one request recovers that - so the choice is a
             # smaller model or no answer at all. Safe to restart because a 429 is
             # known from the response status before any delta is yielded; once
             # text has reached the client, re-requesting would duplicate it.
@@ -308,7 +308,7 @@ class TurnRunner:
 
             # Rebuilt, not replayed. The fallback model's per-minute ceiling is
             # half the primary's (measured: 6,000 vs 12,000), so re-sending the
-            # primary's full-size prompt returns 413 — and a 413 is not a 429, so
+            # primary's full-size prompt returns 413 - and a 413 is not a 429, so
             # nothing retries it. Fewer DATA blocks reach the model, which is why
             # the citation list is re-derived from the *new* chunk_ids below
             # rather than kept from the first attempt: a citation list built from
@@ -333,7 +333,7 @@ class TurnRunner:
                 ) from inner
         except LLMError as exc:
             # A partial stream is closed with an explicit error frame, never
-            # truncated silently — the caller's handler emits it.
+            # truncated silently - the caller's handler emits it.
             raise DependencyUnavailable("llm", "Answer generation failed.") from exc
 
         state["answer"] = "".join(parts)
@@ -351,7 +351,7 @@ class TurnRunner:
         """Resolve ``[n]`` markers to chunks by position, not by trusting the model.
 
         The marker number is the block's position in the prompt, which this side
-        assigned — so a hallucinated identifier cannot produce a citation, and a
+        assigned - so a hallucinated identifier cannot produce a citation, and a
         marker past the end simply resolves to nothing.
         """
         filenames = await load_filenames(
@@ -370,7 +370,7 @@ class TurnRunner:
                     page=chunk.page,
                     char_start=chunk.char_start,
                     char_end=chunk.char_end,
-                    verified=None,  # I2 — not yet checked, not "unsupported"
+                    verified=None,  # I2 - not yet checked, not "unsupported"
                 )
             )
         return citations
@@ -461,7 +461,7 @@ async def run_verification(
     for row in rows.scalars().all():
         verdict = result.verdicts.get(row.marker)
         if verdict is None:
-            continue  # I2 — leave NULL rather than writing a guess
+            continue  # I2 - leave NULL rather than writing a guess
         await session.execute(
             update(db.MessageCitation)
             .where(db.MessageCitation.id == row.id)

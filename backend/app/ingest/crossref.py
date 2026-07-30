@@ -1,13 +1,13 @@
 """Cross-reference resolution: find the author's own explanation of a table or figure.
 
-A cross-reference has two sides. The **target** is where the object lives — the
+A cross-reference has two sides. The **target** is where the object lives - the
 caption, ``Table 2: Quarterly revenue by segment``. The **sources** are the places
-the body text points at it — ``as Table 2 shows, revenue grew 40%``. Linking them
+the body text points at it - ``as Table 2 shows, revenue grew 40%``. Linking them
 gives every table and figure the document's own description of itself.
 
 This exists because the obvious alternative is worse. Asking a VLM to describe a
 chart produces text that is not in the document, so it has no offsets, cannot be
-cited, and — decisively — **a model reading values off a chart axis is a
+cited, and - decisively - **a model reading values off a chart axis is a
 hallucination dressed as extraction.** If a user asks "what was Q3 revenue" and
 the figure came from a model squinting at a bar chart, that is a fabricated number
 with a citation attached, which is the single worst failure available to a system
@@ -20,7 +20,7 @@ where the obvious move is a model is the point, not a shortcut.
 **Where it does not work, stated plainly:** bare appendix tables and raw financial
 statements often have no surrounding narrative; terse captions like
 ``Table 2: Results`` carry little signal; and narrative states *conclusions*
-rather than *contents* — "Table 3 shows our method outperforms baselines" will not
+rather than *contents* - "Table 3 shows our method outperforms baselines" will not
 answer "what was the F1 for BERT on SQuAD?". That is why the table's own markdown
 stays in the chunk (rung 3 of the ladder) and why BM25 matters for tables.
 """
@@ -42,7 +42,11 @@ _LABEL_RE = re.compile(rf"\b{_KIND}\s*{_NUMBER}\b", re.IGNORECASE)
 # A caption is a label at the very start of a block, usually followed by a
 # separator. Distinguishing caption from mention matters: the caption defines the
 # object, a mention refers to it.
-_CAPTION_RE = re.compile(rf"^\s*{_KIND}\s*{_NUMBER}\s*[:.—-]?\s*", re.IGNORECASE)
+# The separator class keeps the dash **last** so it cannot be read as a range.
+# It previously listed a colon, a period, an em-dash and an en-dash; the latter
+# two are now plain hyphens, and `[:.--]` parses as the range `.` to `-`, which
+# is invalid because `.` sorts after `-`.
+_CAPTION_RE = re.compile(rf"^\s*{_KIND}\s*{_NUMBER}\s*[:.-]?\s*", re.IGNORECASE)
 
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -111,7 +115,7 @@ def _sentence_spans(text: str, offset: int) -> list[tuple[int, int, str]]:
 def resolve_cross_references(doc: NormalizedDocument) -> dict[str, CrossReference]:
     """Map every captioned object to its caption and its body-text mentions.
 
-    Consumes ``doc.spans`` rather than re-deriving positions — the builder is the
+    Consumes ``doc.spans`` rather than re-deriving positions - the builder is the
     only thing that knows where blocks live, and every returned span is a real
     offset into ``doc.text``, directly usable as a citation highlight.
     """
@@ -166,7 +170,7 @@ def build_lead_line(
     *,
     max_chars: int = 400,
 ) -> str:
-    """The escalation ladder, rungs 1 and 2 — the author's words, never a model's.
+    """The escalation ladder, rungs 1 and 2 - the author's words, never a model's.
 
     Prepended to a table or figure chunk before embedding, because raw markdown
     retrieves badly as prose. Rung 3 (the table's own cells) is the chunk body and

@@ -30,11 +30,11 @@ BASE = "http://localhost:8000"
 CORPUS = pathlib.Path(__file__).resolve().parents[2] / "document corpus"
 
 # Small and varied: one markdown, one short PDF. The point is the round trip,
-# not throughput — a 43-page 10-Q would spend minutes proving the same thing.
+# not throughput - a 43-page 10-Q would spend minutes proving the same thing.
 #
 # The PDF has to be the one the questions below are about. An earlier version
 # uploaded a different paper and still "passed" the answer checks, because the
-# model wrote a confident paragraph out of an unrelated table of contents — the
+# model wrote a confident paragraph out of an unrelated table of contents - the
 # exact failure the citation chain exists to make visible. Questions and corpus
 # are chosen together, or the harness measures nothing.
 UPLOADS = ["langchain.md", "2607.24512v1.pdf"]
@@ -94,7 +94,7 @@ async def main() -> int:
             response = await client.post(
                 "/documents", files={"file": (name, path.read_bytes(), mime)}
             )
-            # 201 the first time, 200 once the same bytes are already stored —
+            # 201 the first time, 200 once the same bytes are already stored -
             # this script is expected to be run repeatedly against a live server,
             # so treating the deduplicated reply as a failure would only ever be
             # testing whether the database happened to be empty.
@@ -242,7 +242,7 @@ async def main() -> int:
             f"{len(messages)} messages",
         )
 
-        print("\n[7a] workspaces — upload once, scope every chat inside them")
+        print("\n[7a] workspaces - upload once, scope every chat inside them")
         ws_a = await client.post("/workspaces", json={"name": "Workspace A"})
         ws_b = await client.post("/workspaces", json={"name": "Workspace B"})
         check(
@@ -265,7 +265,7 @@ async def main() -> int:
         )
 
         # The same bytes into workspace B must be a *second* document, not the
-        # first one silently reparented — a workspace's whole point is an
+        # first one silently reparented - a workspace's whole point is an
         # independent document set, even for content two projects share.
         doc_in_b = await client.post(
             "/documents",
@@ -322,7 +322,7 @@ async def main() -> int:
         check(
             "a chat started inside a workspace answers from its documents",
             bool(ws_citations),
-            "no citations — retrieval should have been scoped to workspace A's document",
+            "no citations - retrieval should have been scoped to workspace A's document",
         )
 
         convos_a = await client.get("/conversations", params={"workspace_id": ws_a_id})

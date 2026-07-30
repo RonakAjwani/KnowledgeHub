@@ -1,6 +1,6 @@
 """Qdrant collection, upsert, delete, and the one hybrid search call.
 
-One collection with two **named vectors** on every point — dense and sparse —
+One collection with two **named vectors** on every point - dense and sparse -
 rather than two collections. Named vectors are what let a single request prefetch
 both branches and fuse them server-side; two collections would force the merge
 back into application code, which is the thing the design explicitly rejects.
@@ -9,15 +9,15 @@ back into application code, which is the thing the design explicitly rejects.
 two shapes and they are not equivalent:
 
 ``FusionQuery(fusion=Fusion.RRF)``
-    The form nearly every example shows. It takes **no weights and no k** — it is
+    The form nearly every example shows. It takes **no weights and no k** - it is
     plain, unweighted RRF against an *unpublished* server default ``k``.
 
-``RrfQuery(rrf=Rrf(k=..., weights=[...]))``  ← what this module uses
+``RrfQuery(rrf=Rrf(k=..., weights=[...]))``  <- what this module uses
     The weighted form. Both terms of ``RRF_MAX = (w_dense + w_sparse) / (k + 1)``
     are then our own constants.
 
 Using the first would look correct, return plausible results, and quietly make
-every G2 threshold meaningless — because ``FLOOR_FUSED`` is derived from constants
+every G2 threshold meaningless - because ``FLOOR_FUSED`` is derived from constants
 the server would not actually be using. That is invariant I7's failure mode
 exactly: reasonable-looking code, silently broken thresholds.
 
@@ -110,7 +110,7 @@ class QdrantStore:
 
         Only transport failures are retried. ``ResponseHandlingException`` is
         qdrant-client's wrapper for connection, DNS and read-timeout errors;
-        ``UnexpectedResponse`` — a real HTTP status the server chose to return —
+        ``UnexpectedResponse`` - a real HTTP status the server chose to return -
         is left alone, because replaying a request the server actively rejected
         just fails twice and hides the reason behind a delay.
 
@@ -171,7 +171,7 @@ class QdrantStore:
 
     @staticmethod
     def _payload(chunk: Chunk) -> dict[str, Any]:
-        """Exactly the §3 payload — enough to filter and to resolve a citation
+        """Exactly the §3 payload - enough to filter and to resolve a citation
         without a Postgres round trip on the retrieval path."""
         return {
             "user_id": chunk.user_id,
@@ -226,8 +226,8 @@ class QdrantStore:
     async def delete_document(self, user_id: str, doc_id: str) -> None:
         """Delete every point for a document. Scoped by user_id as well as doc_id.
 
-        Filtering on ``doc_id`` alone would be sufficient in practice — ids are
-        uuids — but writing an unscoped delete makes I3 a matter of the caller
+        Filtering on ``doc_id`` alone would be sufficient in practice - ids are
+        uuids - but writing an unscoped delete makes I3 a matter of the caller
         passing the right argument rather than of the query shape.
         """
         await self._retrying(
@@ -265,8 +265,8 @@ class QdrantStore:
         """One call: prefetch dense + sparse, fuse server-side with weighted RRF.
 
         ``k`` and ``weights`` are passed explicitly on every query. Inheriting the
-        server default for ``k`` would leave ``RRF_MAX`` — and therefore
-        ``FLOOR_FUSED`` — derived from a number we do not know and that can change
+        server default for ``k`` would leave ``RRF_MAX`` - and therefore
+        ``FLOOR_FUSED`` - derived from a number we do not know and that can change
         under a version bump.
         """
         cfg = self.settings
@@ -297,7 +297,7 @@ class QdrantStore:
                 lambda: self.client.query_points(
                     collection_name=self.collection,
                     prefetch=prefetch,
-                    # NOT FusionQuery(fusion=Fusion.RRF) — that form carries
+                    # NOT FusionQuery(fusion=Fusion.RRF) - that form carries
                     # neither weights nor k. See the module docstring.
                     query=models.RrfQuery(
                         rrf=models.Rrf(
@@ -334,7 +334,7 @@ class QdrantStore:
         doc_ids: list[str] | None = None,
         limit: int | None = None,
     ) -> list[ScoredPoint]:
-        """A single unfused branch — dense or sparse alone.
+        """A single unfused branch - dense or sparse alone.
 
         Used on the request path: `_search` issues both branches alongside the
         fused query so `attach_branch_ranks` can record each candidate's position
@@ -375,7 +375,7 @@ def _scope(user_id: str, doc_ids: list[str] | None) -> models.Filter:
     """Every filter this module builds starts from user_id (I3).
 
     ``doc_ids`` narrows further when the user has scoped the conversation to a
-    subset of their documents — the "Multi-" in the project title, and the reason
+    subset of their documents - the "Multi-" in the project title, and the reason
     per-document checkboxes in the UI are backed by a payload filter rather than
     post-filtering in application code.
     """

@@ -1,6 +1,6 @@
 """Prompt-hash cache for deterministic LLM calls.
 
-Contract §9 draws the line by streaming, and the split falls out naturally —
+Contract §9 draws the line by streaming, and the split falls out naturally -
 every cacheable call in this system is a deterministic temperature-0 one:
 
 ===========================  ================================
@@ -17,7 +17,7 @@ actually re-executes.
 
 In-process and bounded rather than Redis-backed: the deployment is a single
 process on 512 MB, a second network dependency for a latency optimisation would
-be a poor trade, and the cache is pure performance — losing it on restart costs
+be a poor trade, and the cache is pure performance - losing it on restart costs
 nothing but time.
 """
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 class PromptCache:
     """Bounded LRU keyed on the full request shape.
 
-    The key covers everything that could change the answer — model, temperature,
+    The key covers everything that could change the answer - model, temperature,
     max_tokens and the rendered messages. A cache keyed on the prompt alone
     would serve a `gemini-2.0-flash-lite` answer to a `gemini-2.0-flash` call and
     make an ablation between the two silently meaningless.

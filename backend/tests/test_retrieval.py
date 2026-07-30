@@ -1,8 +1,8 @@
 """Rerank, cross-formulation fusion, and the RRF_MAX arithmetic.
 
 The reranker tests are the ones that matter most here: its whole job is to be
-*conditional*, and every branch it can take — skipped, cached, rate-limited,
-quota-exhausted — has to be distinguishable from a healthy call afterwards, or
+*conditional*, and every branch it can take - skipped, cached, rate-limited,
+quota-exhausted - has to be distinguishable from a healthy call afterwards, or
 invariant I1 is decorative.
 """
 
@@ -92,7 +92,7 @@ def test_narrow_margin_is_never_decisive() -> None:
 
 
 def test_single_candidate_is_not_decisive() -> None:
-    """One result is not evidence of confidence — let the floor judge it."""
+    """One result is not evidence of confidence - let the floor judge it."""
     assert is_decisive([candidate(1, fused=1.0, dense=0, sparse=0)], 1.5)[0] is False
 
 
@@ -147,7 +147,7 @@ async def test_rerank_score_reflects_relevance_not_position() -> None:
     results came back.
 
     An earlier ``_reorder`` assigned ``1.0 - position/len(order)``, so the blend
-    G2 gates on was a fixed function of ``top_n`` — exactly 0.840 for every query
+    G2 gates on was a fixed function of ``top_n`` - exactly 0.840 for every query
     at ``top_n = 5``, whether the documents were relevant or not. ``FLOOR_RERANK``
     was then a comparison against a constant and could never fire. Two result sets
     of identical length but opposite quality must not produce the same score.
@@ -196,7 +196,7 @@ async def test_second_identical_query_is_served_from_cache() -> None:
     assert first.status is RerankStatus.APPLIED
     assert second.status is RerankStatus.CACHED
     assert calls["n"] == 1, "1000 calls/month is the budget an eval sweep would burn"
-    # A cache hit has to carry the scores too, not just the ordering — otherwise
+    # A cache hit has to carry the scores too, not just the ordering - otherwise
     # the gate sees nothing to score and the cached path silently differs.
     assert [c.rerank_score for c in second.candidates] == [0.71, 0.12]
 
@@ -253,7 +253,7 @@ async def test_timeout_falls_back_without_tripping() -> None:
 
 
 async def test_every_failure_preserves_fused_order() -> None:
-    """The fallback chain ends at fused order — a query is never lost."""
+    """The fallback chain ends at fused order - a query is never lost."""
     settings = Settings(cohere_api_key="k", decisive_ratio=99.0)
     reranker = Reranker(
         settings,
@@ -319,7 +319,7 @@ def test_fusion_keeps_the_occurrence_carrying_branch_ranks() -> None:
 
 
 def test_attach_branch_ranks_marks_absence_as_none() -> None:
-    """Absent from a branch is None, not a large rank — one-sided evidence has
+    """Absent from a branch is None, not a large rank - one-sided evidence has
     to stay visible to the decisive-skip check."""
     fused = [candidate(1), candidate(2)]
     out = attach_branch_ranks(fused, dense_order=["c001"], sparse_order=["c001", "c002"])

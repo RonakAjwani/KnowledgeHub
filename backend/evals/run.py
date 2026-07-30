@@ -1,6 +1,6 @@
 """Run the golden set against the ingested corpus and report.
 
-Grading is deliberately crude on the answerable side — substring presence rather
+Grading is deliberately crude on the answerable side - substring presence rather
 than a judge model. A judge would be more nuanced and would also be the thing
 under test: if the pipeline and the grader share a model and a prompt style,
 agreement between them measures consistency, not correctness. A number that
@@ -55,8 +55,8 @@ from evals.questions import QUESTIONS, Expect, Question
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-# Windows consoles default to cp1252, and models emit typographic whitespace —
-# gpt-oss-20b writes "July 2026" with a narrow no-break space. Printing an
+# Windows consoles default to cp1252, and models emit typographic whitespace -
+# gpt-oss-20b writes "July 2026" with a narrow no-break space. Printing an
 # answer then kills the run *after* the LLM tokens were spent, losing every
 # result behind it. Degrade the character rather than the run.
 for _stream in (sys.stdout, sys.stderr):
@@ -83,7 +83,7 @@ _DECLINE_MARKERS = (
     "not stated",
     "not reported",
     # The inflected forms. "not reported" was present and "do not report" was
-    # not, so E6 — "The documents you provided do not report an F1 score" — was
+    # not, so E6 - "The documents you provided do not report an F1 score" - was
     # scored as a hallucination for declining exactly as intended. A refusal the
     # grader cannot see is worse than no grader: it moves the number in the
     # direction that flatters nothing and blames the wrong stage.
@@ -129,7 +129,7 @@ class Outcome:
     model: str = ""
     # Did retrieval put a chunk from every document the question needs into the
     # context the model actually saw? Separates "retrieval missed it" from "the
-    # passage was there and the model did not use it" — the two failures a
+    # passage was there and the model did not use it" - the two failures a
     # single accuracy score collapses into one.
     docs_expected: list[str] = field(default_factory=list)
     retrieved_expected: bool = True
@@ -163,7 +163,7 @@ _NUMERIC = re.compile(r"^\d[\d,.]*$")
 def present(needle: str, answer_lower: str) -> bool:
     """Is this expected fact in the answer?
 
-    Text is matched as a plain substring — the model's phrasing is its own.
+    Text is matched as a plain substring - the model's phrasing is its own.
     Numbers are matched on a **number boundary**, because a raw substring test
     silently inflates the score: "75" is inside "175", "46" is inside "460", and
     "0.7" is inside "0.75". Every one of those is a different fact, and several
@@ -189,7 +189,7 @@ def grade_answer(question: Question, answer: str, grade: str) -> tuple[bool, boo
         return declined, declined, []
 
     lowered = answer.lower()
-    # `must_include_all` is a conjunction — every part of a multi-part question
+    # `must_include_all` is a conjunction - every part of a multi-part question
     # has to be answered. `must_include` is a disjunction: any one hit means the
     # fact is present, under a different wording.
     missing = [s for s in question.must_include_all if not present(s, lowered)]
@@ -214,7 +214,7 @@ def cite_support(
 
     ``verify_api.py`` already proves a citation resolves to real characters in
     ``normalized_text``. That is a different question from whether those
-    characters *back the claim* — a marker pointing at a real but irrelevant
+    characters *back the claim* - a marker pointing at a real but irrelevant
     passage passes the resolution check and is still a false citation.
 
     Measured **without a judge**, deliberately. For every expected fact the
@@ -231,7 +231,7 @@ def cite_support(
     dangling = sum(1 for c in cited for m in c.markers if m not in by_marker)
 
     # A derived answer is *computed* from retrieved values, so it is absent from
-    # the source by construction — B6's "46" is a subtraction and appears
+    # the source by construction - B6's "46" is a subtraction and appears
     # nowhere in LegalKG. Checking it would score a correct citation as a
     # miscitation every time, which is the metric failing rather than the
     # pipeline.
@@ -258,13 +258,13 @@ async def run_retrieval_only(
     """Everything up to and including the gate, with no generation call.
 
     The floors are a property of ``grade``, which decides answer-versus-abstain
-    *before* ``generate`` ever runs — so the tuning signal costs zero LLM calls.
+    *before* ``generate`` ever runs - so the tuning signal costs zero LLM calls.
     That matters practically (Gemini's free tier is 20 requests/day on the
     generate model, far short of a 55-question sweep) and methodologically: the
     measurement no longer moves when the generation model changes underneath it.
 
-    ``route`` and ``rewrite`` are skipped rather than mocked. Both fail open — to
-    ``retrieve`` and to the raw query respectively — so skipping them reproduces
+    ``route`` and ``rewrite`` are skipped rather than mocked. Both fail open - to
+    ``retrieve`` and to the raw query respectively - so skipping them reproduces
     their degraded path exactly rather than approximating it.
     """
     started = time.time()
@@ -550,7 +550,7 @@ async def main() -> int:
 def _floor_sweep(outcomes: list[Outcome]) -> None:
     """What each candidate floor would do, per score source.
 
-    Relevance is already recorded, so re-thresholding it is free — the whole
+    Relevance is already recorded, so re-thresholding it is free - the whole
     sweep is one pass over numbers rather than N eval runs. Reranked and
     un-reranked candidates are swept separately because they are different
     distributions on different scales; averaging them is the bug
@@ -559,7 +559,7 @@ def _floor_sweep(outcomes: list[Outcome]) -> None:
     ``kept`` is answerable questions the floor lets through, ``gated`` is
     should-decline questions it stops. Both rise and fall together, so the number
     to look for is a floor sitting in a *wide* gap between the two populations,
-    not the one that maximises the sum — a knife-edge optimum on 55 questions is
+    not the one that maximises the sum - a knife-edge optimum on 55 questions is
     a fit to this corpus, not a threshold.
     """
     for source, label in (

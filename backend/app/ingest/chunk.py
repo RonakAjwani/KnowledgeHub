@@ -2,9 +2,9 @@
 
 Two units, deliberately:
 
-* the **child** is what gets embedded and BM25'd — small, so retrieval is precise
+* the **child** is what gets embedded and BM25'd - small, so retrieval is precise
   and a match means the match is actually about the query;
-* the **parent** is what the LLM receives — the enclosing section window, so the
+* the **parent** is what the LLM receives - the enclosing section window, so the
   model has enough context to answer rather than a fragment torn out of a
   paragraph.
 
@@ -105,7 +105,7 @@ def _packed_prose(
 
     Splitting alone is only half a chunker. Measured over this corpus before
     packing existed, **61% of chunks came in under half the 250-token target and
-    30% were under 25 tokens** — headings, one-line paragraphs and stray labels
+    30% were under 25 tokens** - headings, one-line paragraphs and stray labels
     each becoming their own chunk. A 20-token fragment competes for a top-k slot
     against a 230-token passage and wins it on a lucky term match, which spends
     the context budget on something that cannot answer anything.
@@ -117,8 +117,8 @@ def _packed_prose(
 
     * **Section.** Text under a different heading is a different subject; the
       same rule the parent window already follows.
-    * **Tables.** They own the atomicity rules in ``_split_table`` — header
-      repetition, never splitting mid-row — and folding one into a prose run
+    * **Tables.** They own the atomicity rules in ``_split_table`` - header
+      repetition, never splitting mid-row - and folding one into a prose run
       would discard all of it.
     * **Derived content.** A VLM's description of a figure is marked as such in
       the text; packing it together with the document's own words would produce
@@ -126,7 +126,7 @@ def _packed_prose(
       ``is_derived`` flag that must lie about one of them.
 
     A block that already exceeds the ceiling on its own still splits exactly as
-    before — packing never makes a chunk bigger than splitting would allow.
+    before - packing never makes a chunk bigger than splitting would allow.
 
     Offsets stay honest for free: the blocks are adjacent in ``normalized_text``,
     so ``[first.start, last.end]`` is one contiguous span (separators included)
@@ -164,7 +164,7 @@ def _split_table(
     """Split a table by row, repeating the header in every fragment.
 
     The repeated header cannot come from ``normalized_text`` for fragments after
-    the first — those rows are not adjacent to the header in the document. So the
+    the first - those rows are not adjacent to the header in the document. So the
     *offsets* cover only the rows the fragment actually contains, and the header
     is re-attached to the embedded text later, in :func:`_chunk_text_for`. Offsets
     stay honest; the embedding gets what it needs.
@@ -229,7 +229,7 @@ def _parent_window(
 
     lo = hi = index
     # Each pass tries both sides and stops the moment neither moved. The
-    # termination condition is "no progress", not a set of boundary checks —
+    # termination condition is "no progress", not a set of boundary checks -
     # an earlier version alternated sides and broke only at section or array
     # edges, which looped forever whenever growth was blocked by the *token
     # budget* instead: `moved` stayed false, no break condition held, and
@@ -260,7 +260,7 @@ def _parent_window(
             break
 
     # The parent must always contain its child, even if the child alone exceeds
-    # the cap — a parent that omits the cited span would break the scroll target.
+    # the cap - a parent that omits the cited span would break the scroll target.
     return min(start, piece.start), max(end, piece.end)
 
 
@@ -274,7 +274,7 @@ def _governing_label(
     block's own text finds captions and misses every table they describe, which
     silently drops the whole lead-line ladder for the objects that need it most.
 
-    Order matters — own text first, then the block above, then below — because a
+    Order matters - own text first, then the block above, then below - because a
     table sandwiched between two captioned figures must not adopt the wrong one.
     """
     span = spans[position]
@@ -307,7 +307,7 @@ def _chunk_text_for(
 
     For prose this is the span verbatim. For tables it is the author's caption and
     referencing narrative (ladder rungs 1 and 2), then the repeated header, then
-    the rows — because raw markdown embeds badly as prose and the document's own
+    the rows - because raw markdown embeds badly as prose and the document's own
     words describe the table better than a model's would.
     """
     body = doc.text[piece.start : piece.end]
@@ -343,7 +343,7 @@ def chunk_document(
     index = 0
 
     # Walked with an explicit cursor rather than `enumerate`, because a prose run
-    # can consume several spans at once — see `_packed_prose`.
+    # can consume several spans at once - see `_packed_prose`.
     position = 0
     while position < len(doc.spans):
         span = doc.spans[position]
@@ -359,7 +359,7 @@ def chunk_document(
             pieces, consumed = _packed_prose(doc, doc.spans, position, child_max)
             table_header = ""
 
-        # Which captioned object this block belongs to — its own caption if it
+        # Which captioned object this block belongs to - its own caption if it
         # has one, otherwise an adjacent caption block.
         label = _governing_label(doc, doc.spans, position)
         reference = references.get(label) if label else None

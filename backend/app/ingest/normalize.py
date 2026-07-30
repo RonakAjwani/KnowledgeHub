@@ -11,7 +11,7 @@ reference project carries the failure in embryo: ``LoadedDocument.full_text``
 joins blocks with ``"\\n\\n"``, while its chunker separately rebuilds a
 ``combined`` string using hand-rolled ``cursor += len(block.text) + 2``
 arithmetic. Nothing depended on the two agreeing, so nothing noticed they had
-drifted. Here, offsets are load-bearing — that same drift is a citation
+drifted. Here, offsets are load-bearing - that same drift is a citation
 highlighting the wrong sentence, and it fails silently and convincingly.
 
 The defence is structural rather than documentary: this module owns the separator,
@@ -63,7 +63,7 @@ def build_normalized_text(blocks: Sequence[Block]) -> NormalizedDocument:
     Guarantees, all of which the property tests pin:
 
     * ``result.text[span.start:span.end]`` is exactly that block's rendered,
-      post-sanitisation content — for every span, with no exceptions.
+      post-sanitisation content - for every span, with no exceptions.
     * Spans appear in document order and never overlap.
     * ``span.block_index`` indexes into the *input* sequence, so a span can always
       be traced back to the block it came from even though empty blocks are

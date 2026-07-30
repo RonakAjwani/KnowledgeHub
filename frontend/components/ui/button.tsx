@@ -12,21 +12,30 @@ type ButtonVariant =
 
 type ButtonSize = "sm" | "md" | "icon";
 
+// No focus utilities here: the focus ring is a single global rule in
+// globals.css keyed on `button:focus-visible`, so every button gets the
+// identical indicator and a new one cannot forget it.
 const BASE =
   "inline-flex shrink-0 items-center justify-center whitespace-nowrap font-medium transition-colors " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-1 " +
-  "focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-950 " +
   "disabled:pointer-events-none disabled:opacity-45";
 
+// `PRIMARY` is a single semantic triplet with no `dark:` variants and no `!`.
+// Each token resolves per theme in globals.css, so there is no light/dark pair
+// to tie-break - which is what previously required `dark:bg-zinc-100!` here
+// (see the semantic-token comment in globals.css for the full explanation).
+// Deliberately monochrome: this product carries no brand accent on its
+// buttons, so "primary" is expressed by full-strength contrast against the
+// ground rather than by hue.
+const PRIMARY = "bg-primary text-primary-fg hover:bg-primary-hover";
+
 const VARIANTS: Record<ButtonVariant, string> = {
-  default:
-    "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white",
-  // The one filled-orange action per screen — send, upload, new workspace,
-  // sign up. Reserved for the single most important thing on the page; every
-  // other action uses default/subtle/outline/ghost so the accent keeps meaning
-  // "do this one" rather than becoming decoration.
-  accent:
-    "bg-accent-600 text-white hover:bg-accent-700 dark:bg-accent-500 dark:hover:bg-accent-400",
+  default: PRIMARY,
+  // Kept as a distinct name for the call sites that mean "this is *the* action
+  // on this screen" (send, upload, create workspace), but it renders
+  // identically to `default`. The palette is near-monochrome by decision, so
+  // there is no separate accent treatment to point at; the name still
+  // documents intent and gives one place to diverge again later.
+  accent: PRIMARY,
   subtle:
     "bg-zinc-100 text-zinc-900 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700",
   outline:

@@ -2,7 +2,7 @@
 
 Upload returns immediately with ``status: queued`` and runs ingest as a
 background task in the same process. A 200-page PDF cannot block an HTTP request,
-and a separate worker service is not available — 750 free instance-hours per
+and a separate worker service is not available - 750 free instance-hours per
 month fits exactly one service, so ingest shares this process and its 512 MB.
 
 **A duplicate upload is not an error.** The same bytes from the same user return
@@ -134,7 +134,7 @@ async def upload_document(
 
 
 async def _owned_workspace(session: AsyncSession, user_id: str, workspace_id: str) -> None:
-    """A document cannot be filed under a workspace the caller does not own —
+    """A document cannot be filed under a workspace the caller does not own -
     otherwise a guessed id would silently attach someone else's upload to it."""
     workspace = await session.get(db.Workspace, workspace_id)
     if workspace is None or workspace.user_id != user_id:
@@ -142,7 +142,7 @@ async def _owned_workspace(session: AsyncSession, user_id: str, workspace_id: st
 
 
 async def _run_ingest(doc_id: str, user_id: str, data: bytes, mime: str) -> None:
-    """Background ingest with its own session — the request's is long gone."""
+    """Background ingest with its own session - the request's is long gone."""
     maker: async_sessionmaker[AsyncSession] = get_sessionmaker()
 
     async def publisher(document_id: str, status: DocumentStatus, progress) -> None:
@@ -196,7 +196,7 @@ async def list_documents(
 async def _owned(session: AsyncSession, user_id: str, doc_id: str) -> db.Document:
     """Fetch scoped by user_id (I3).
 
-    A document belonging to someone else is reported as **404, not 403** — a 403
+    A document belonging to someone else is reported as **404, not 403** - a 403
     would confirm that the id exists, which is an enumeration oracle. The
     taxonomy keeps 403 for resources the caller can legitimately know about.
     """

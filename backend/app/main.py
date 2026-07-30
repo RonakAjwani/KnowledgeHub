@@ -2,7 +2,7 @@
 
 The lifespan does three things and deliberately not a fourth: it refuses to start
 misconfigured, ensures the Qdrant collection exists, and closes the pools on the
-way out. It does **not** eagerly load the embedding model — that is ~130 MB of
+way out. It does **not** eagerly load the embedding model - that is ~130 MB of
 ONNX weights, and paying for it at import time would make every cold start on a
 512 MB box slower for no benefit. The first ingest or query loads it lazily.
 """

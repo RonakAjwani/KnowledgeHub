@@ -151,7 +151,7 @@ def make_two_column_pdf() -> bytes:
     c = canvas.Canvas(buf, pagesize=letter)
 
     c.setFont("Helvetica", 11)
-    # Left column — level with the table, not above or below it.
+    # Left column - level with the table, not above or below it.
     c.drawString(60, 600, "Fund Manager Ms. Ada Lovelace")
     c.drawString(60, 584, "Net AUM 6634.45 crore")
     c.drawString(60, 568, "Expense Ratio 1.54%")
@@ -186,7 +186,7 @@ def test_a_side_column_is_read_as_its_own_column_not_merged_across_the_page() ->
     """Recovering the text is not enough if it comes back interleaved.
 
     Lines are grouped by vertical position, so a full-width crop would join
-    "Fund Manager Ms. Ada Lovelace" to "Sector Allocation 32.16%" — they share a
+    "Fund Manager Ms. Ada Lovelace" to "Sector Allocation 32.16%" - they share a
     baseline. Each column has to be cropped before the grouping happens.
     """
     result = parse_document(make_two_column_pdf(), "application/pdf")
@@ -198,7 +198,7 @@ def test_a_side_column_is_read_as_its_own_column_not_merged_across_the_page() ->
 def make_jittered_row_pdf() -> bytes:
     """A row label and its figures set 1.4pt apart vertically.
 
-    Real financial tables do this constantly — figures in a tabular font sit on
+    Real financial tables do this constantly - figures in a tabular font sit on
     a marginally different baseline from the label beside them. The measured
     case is the 360 ONE macro table: label top=145.264, figures top=143.878.
     """
@@ -214,7 +214,7 @@ def make_jittered_row_pdf() -> bytes:
 
 
 def test_a_rows_figures_stay_with_their_own_label() -> None:
-    """Lines group on a 2.5pt tolerance, so label and figures land on one line —
+    """Lines group on a 2.5pt tolerance, so label and figures land on one line -
     but sorting the line by baseline first puts the figures ahead of the label,
     and every row silently inherits the values of the row above it."""
     result = parse_document(make_jittered_row_pdf(), "application/pdf")
@@ -291,7 +291,7 @@ def test_table_citation_span_covers_the_table_only() -> None:
 
 
 def test_complexity_assessment_runs_on_every_page() -> None:
-    """The Tier-2 escalation signal — a local heuristic, never a model."""
+    """The Tier-2 escalation signal - a local heuristic, never a model."""
     result = parse_document(make_report_pdf(), "application/pdf")
     assert len(result.assessments) == 2
     # A clean born-digital page with a readable table needs no escalation.

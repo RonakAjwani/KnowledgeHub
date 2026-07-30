@@ -1,14 +1,14 @@
-"""Tier 2 — escalate visually complex pages to a VLM through the existing adapter.
+"""Tier 2 - escalate visually complex pages to a VLM through the existing adapter.
 
 Tier 1 handles prose-only pages perfectly at near-zero cost. It fails on scanned
 pages, on tables whose ruling lines it can see but whose cells it cannot read,
 and on pages that are mostly figure. Those pages are rendered to an image and
-sent to the same LLM adapter the rest of the system uses — no GPU, no new
+sent to the same LLM adapter the rest of the system uses - no GPU, no new
 dependency, no RAM cost, and provider-swappability inherited for free.
 
 **What bounds this is tokens, not requests.** There is no separate image
 allowance on the free tier: a page image draws on the same TPM budget as text and
-drains it far faster — one tiled page can cost several hundred to a couple of
+drains it far faster - one tiled page can cost several hundred to a couple of
 thousand tokens before the prompt is read. So the queue is paced on a token
 budget, and ``VLM_RENDER_DPI`` is a real tuning constant rather than an
 implementation detail: at or below 384 px on both sides an image is a flat 258
@@ -22,7 +22,7 @@ quietly would produce exactly the fails-convincingly outcome this design exists 
 avoid.
 
 **This is VLM extraction, not VLM summarisation.** Turning pixels into a markdown
-table is the model's job. Making that table *findable* is the author's narrative —
+table is the model's job. Making that table *findable* is the author's narrative -
 see :mod:`app.ingest.crossref`. A model reading values off a chart axis is a
 hallucination dressed as extraction, and this module never asks it to.
 """
@@ -49,9 +49,9 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Gemini free-tier TPM sits somewhere in the 250K–1M range depending on model.
-# Pacing against the conservative end costs a little throughput on ingest — which
-# is async and off the request path — and avoids a 429 storm if the real ceiling
+# Gemini free-tier TPM sits somewhere in the 250K-1M range depending on model.
+# Pacing against the conservative end costs a little throughput on ingest - which
+# is async and off the request path - and avoids a 429 storm if the real ceiling
 # is the lower one.
 DEFAULT_TPM_BUDGET = 200_000
 
@@ -72,7 +72,7 @@ or add commentary.
 exactly as printed.
 - Render mathematical formulae as LaTeX between $ delimiters.
 - For a chart or diagram, describe its type, axis labels and legend. Do NOT read \
-data values off the plot area — state the labels and say the values are shown \
+data values off the plot area - state the labels and say the values are shown \
 graphically.
 - Output the markdown only. No preamble, no code fence, no explanation.
 """
@@ -127,7 +127,7 @@ class PageEscalator:
             png, width, height = render_page_png(
                 pdf_bytes, page_number, self.settings.vlm_render_dpi
             )
-        except Exception as exc:  # noqa: BLE001 — a page that will not render is
+        except Exception as exc:  # noqa: BLE001 - a page that will not render is
             logger.warning("could not render page %d: %s", page_number, exc)
             return None  # not fatal; Tier 1's text for that page stands
 
@@ -181,7 +181,7 @@ async def escalate_document(
     degradations: list[Degradation] = []
 
     if flagged and not cfg.llm_model_vlm:
-        # The configured provider exposes no vision model — Groq's catalogue is
+        # The configured provider exposes no vision model - Groq's catalogue is
         # text-only. Say so once, rather than posting a page image at a text
         # endpoint and collecting an identical failure for every flagged page.
         # Tier 1's extraction stands, which is the same outcome, minus the noise.
@@ -214,7 +214,7 @@ async def escalate_document(
                     f"{len(skipped)} page(s) exceeded the per-document escalation cap "
                     f"of {cfg.max_escalated_pages}: "
                     f"{', '.join(str(a.page) for a in skipped[:10])}"
-                    f"{' …' if len(skipped) > 10 else ''}"
+                    f"{' ...' if len(skipped) > 10 else ''}"
                 ),
             )
         )
@@ -244,7 +244,7 @@ def blocks_from_escalation(
 
     ``is_derived`` stays **False**: this is the page's own content transcribed
     from pixels, not a model's description of it. The derived flag is reserved
-    for synthesised content that does not exist in the document — conflating the
+    for synthesised content that does not exist in the document - conflating the
     two would put an "AI-described" badge on a faithfully transcribed table and
     teach users to distrust the marker.
     """

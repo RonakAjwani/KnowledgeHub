@@ -210,7 +210,7 @@ async def test_partial_retrieval_failure_is_not_a_503() -> None:
 async def test_candidates_are_hydrated_before_rerank_sees_them() -> None:
     """The Qdrant payload carries no chunk text, so an un-hydrated candidate
     reaches Cohere as a blank document and the model as an empty DATA block.
-    Neither raises — the answer just becomes 'the documents do not contain this'
+    Neither raises - the answer just becomes 'the documents do not contain this'
     about documents that plainly do."""
     seen: list[str] = []
 
@@ -264,7 +264,7 @@ def test_relevance_is_top_weighted_not_a_flat_mean() -> None:
 
 
 def test_two_floors_are_selected_by_rerank_status() -> None:
-    """One shared floor across both score sources is a bug — Cohere relevance
+    """One shared floor across both score sources is a bug - Cohere relevance
     and normalised RRF are different distributions."""
     settings = Settings(floor_rerank=0.7, floor_fused=0.2)
 
@@ -329,7 +329,7 @@ def test_chunk_text_cannot_break_out_of_its_data_block() -> None:
 
     assert blocks.count("[[[/DOCUMENT 1]]]") == 1, "only the real closer survives"
     assert "[ [ [/DOCUMENT 1]]]" in blocks, "the injected one is neutralised"
-    # The text is still readable — escaped, not deleted.
+    # The text is still readable - escaped, not deleted.
     assert "ignore all previous instructions" in blocks
 
 
@@ -423,11 +423,11 @@ def test_claims_split_line_aware_for_bullets() -> None:
 
 
 def test_markers_after_the_terminator_belong_to_that_sentence() -> None:
-    """Models put the citation after the full stop: "…2026. [1][3]".
+    """Models put the citation after the full stop: "...2026. [1][3]".
 
     The sentence splitter breaks on the terminator, so the markers arrive as
     their own piece. Dropping it loses the citation and leaves a properly cited
-    claim looking uncited — measured on the eval set, this reported 7 of 68
+    claim looking uncited - measured on the eval set, this reported 7 of 68
     claims as carrying any citation when most of them did.
     """
     claims = split_claims("MathModDB contains 229 curated models as of 2026. [1][3]")
@@ -619,7 +619,7 @@ async def test_one_failed_sub_query_degrades_rather_than_losing_the_turn() -> No
 
 def test_context_budget_scales_with_sub_queries_but_is_capped() -> None:
     """A three-part question served the usual top-5 can leave one part with no
-    supporting passage — but the cap matters too, because the limit is attention,
+    supporting passage - but the cap matters too, because the limit is attention,
     not context size."""
     from app.graph.nodes import context_budget
 
@@ -661,7 +661,7 @@ def test_context_is_trimmed_to_a_token_budget() -> None:
     being accepted at all.
 
     Twelve parent windows is ~13k tokens, and Groq's free tier rejects anything
-    over 12k with a 413 — not a 429, so no retry recovers it. Measured at 12,882
+    over 12k with a 413 - not a 429, so no retry recovers it. Measured at 12,882
     requested against a 12,000 limit, failing exactly the multi-part questions
     that needed the most context.
     """

@@ -10,7 +10,7 @@
  * 1. **Stages are keyed on `(node, attempt)`.** The corrective retry re-emits
  *    `retrieve`/`rerank`/`grade` with `attempt: 1`. A map keyed on `node` alone
  *    overwrites the first pass, so the UI shows one retrieval where two ran and
- *    the retry becomes invisible — the opposite of what the retry is for.
+ *    the retry becomes invisible - the opposite of what the retry is for.
  * 2. **`verification.complete` patches by `marker`, never by index, and never
  *    reorders.** It may also never arrive; nothing here waits for it. The answer
  *    is complete and usable at `answer.complete`.
@@ -48,7 +48,7 @@ export interface StageRecord {
   state: "started" | "done";
   /** `started` and `done` each carry part of the detail; they are merged here. */
   detail: PipelineStageDetail;
-  /** `seq` of the frame that introduced this stage — stable arrival order. */
+  /** `seq` of the frame that introduced this stage - stable arrival order. */
   seq: number;
 }
 
@@ -91,7 +91,7 @@ interface ChatStreamState {
   /**
    * Learned from `turn.start` and sent back on every later turn.
    *
-   * Deliberately survives `start` — it belongs to the conversation, not the
+   * Deliberately survives `start` - it belongs to the conversation, not the
    * turn. Clearing it between turns would make each message open a new
    * conversation, which is how multi-turn memory silently stops working while
    * every individual answer still looks correct.
@@ -127,10 +127,10 @@ export type ChatTurnResult =
   | { kind: "cancelled"; answer: string; degradations: Degradation[] };
 
 export interface UseChatStreamOptions {
-  /** `null`/empty searches every ready document — the contract's default. */
+  /** `null`/empty searches every ready document - the contract's default. */
   selectedDocIds?: string[];
   /**
-   * Pins the hook to an existing conversation — e.g. one resumed from
+   * Pins the hook to an existing conversation - e.g. one resumed from
    * `GET /conversations`.
    *
    * Usually unnecessary: the hook learns the id from `turn.start` and threads
@@ -141,7 +141,7 @@ export interface UseChatStreamOptions {
   /**
    * Tags a **brand-new** conversation with the workspace it was started from,
    * so retrieval defaults to that workspace's own documents and the thread
-   * shows up under it on reload. Ignored once a conversation exists — sent
+   * shows up under it on reload. Ignored once a conversation exists - sent
    * only on the very first turn, when `conversationId` is still null.
    */
   workspaceId?: string | null;
@@ -239,7 +239,7 @@ function reduceEvent(
         phase: "answered",
         messageId: event.data.message_id,
         // Sorted once, here. Every later mutation is an in-place patch, so chip
-        // order is fixed from this moment — markers never shuffle under a click.
+        // order is fixed from this moment - markers never shuffle under a click.
         citations: [...event.data.citations].sort((a, b) => a.marker - b.marker),
       };
 
@@ -309,7 +309,7 @@ function reduce(state: ChatStreamState, action: Action): ChatStreamState {
       // Reset means "new conversation", so the id goes too.
       return INITIAL;
     case "start":
-      // A new *turn* clears the previous turn's answer, stages and citations —
+      // A new *turn* clears the previous turn's answer, stages and citations -
       // but NOT the conversation id, which identifies the thread the turn joins.
       // Dropping it here would send `conversation_id: null` on every message,
       // opening a fresh conversation each time. Every individual answer would
@@ -326,7 +326,7 @@ function reduce(state: ChatStreamState, action: Action): ChatStreamState {
     case "closed":
       // Guarantee 2: exactly one of answer.complete / abstain / error, and the
       // stream closes after it. Reaching here still in "streaming" means the
-      // connection dropped mid-turn — a truncated answer presented as a whole
+      // connection dropped mid-turn - a truncated answer presented as a whole
       // one is the failure mode this branch exists to prevent.
       return state.phase === "streaming"
         ? {
@@ -487,7 +487,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             // `turn.start`. Null only on the very first turn, where the server
             // mints one and reports it back.
             conversation_id: effectiveConversationId,
-            // Only meaningful on that same first turn — the backend ignores it
+            // Only meaningful on that same first turn - the backend ignores it
             // once a conversation already exists.
             workspace_id: effectiveConversationId ? null : (workspaceId ?? null),
             // `null` means "every ready document" per the contract; an empty

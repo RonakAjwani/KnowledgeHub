@@ -1,7 +1,7 @@
 # Deployment Setup Checklist
 
 Written 2026-07-30 for a parallel session doing the account/key wiring while the
-eval runs elsewhere. **No backend code changes are required for any of this** —
+eval runs elsewhere. **No backend code changes are required for any of this** -
 every knob already exists in `backend/app/config.py`. This is provisioning and
 environment variables only.
 
@@ -24,7 +24,7 @@ QDRANT_API_KEY=<key>
 QDRANT_COLLECTION=chunks
 ```
 
-Wired at `app/retrieval/qdrant_store.py:74` —
+Wired at `app/retrieval/qdrant_store.py:74` -
 `AsyncQdrantClient(url=..., api_key=self.settings.qdrant_api_key or None)`.
 The empty-string default becomes `None`, which is what makes the local
 no-auth container work unchanged.
@@ -41,7 +41,7 @@ no-auth container work unchanged.
 > That probe re-measures `rank_base`, which `RRF_MAX` and therefore every
 > relevance threshold derive from (I7). It is the cheapest possible proof that
 > the cloud cluster behaves like the local one. **Re-run it after any Qdrant
-> version bump** — Cloud may not be on the same version as the local image.
+> version bump** - Cloud may not be on the same version as the local image.
 
 Then re-ingest, because a new cluster is empty:
 
@@ -53,7 +53,7 @@ PYTHONPATH=. poetry run python scripts/ingest_corpus.py --reset
 
 Create an application; take both keys.
 
-**Backend** — `auth.py:62` raises at startup if the secret is missing, so a
+**Backend** - `auth.py:62` raises at startup if the secret is missing, so a
 misconfiguration fails loudly on boot rather than on the first request:
 
 ```
@@ -62,7 +62,7 @@ CLERK_SECRET_KEY=sk_...
 CLERK_AUTHORIZED_PARTIES=https://<deployed-frontend-origin>
 ```
 
-`CLERK_AUTHORIZED_PARTIES` is comma-separated and is the audience check —
+`CLERK_AUTHORIZED_PARTIES` is comma-separated and is the audience check -
 `auth.py:70` splits it and passes it to `authenticate_request`. Leaving it empty
 passes `None`, which disables that check. Set it.
 
@@ -83,9 +83,9 @@ own styled forms at `app/sign-in/[[...sign-in]]`.
 > **This is the one flow never exercised against real credentials.** The README
 > already states it as a known limitation. `AUTH_MODE=dev` is the evaluated
 > path; the Clerk path was built and tested only for correct *fallback* with no
-> key configured. Budget time to click through sign-up → sign-in → a chat turn.
+> key configured. Budget time to click through sign-up -> sign-in -> a chat turn.
 
-## 3 · CORS — the most likely first failure
+## 3 · CORS - the most likely first failure
 
 ```
 CORS_ORIGINS=https://<deployed-frontend-origin>
@@ -93,7 +93,7 @@ CORS_ORIGINS=https://<deployed-frontend-origin>
 
 Comma-separated, parsed at `config.py:439`. It defaults to
 `http://localhost:3000`, so a deployed frontend calling a deployed backend is
-blocked until this is set. The symptom is not an error page — it is every
+blocked until this is set. The symptom is not an error page - it is every
 request failing in the browser console while `curl` against the same backend
 works perfectly, which sends people to debug the wrong side.
 
@@ -107,7 +107,7 @@ Both Dockerfiles already exist (`backend/Dockerfile`, `frontend/Dockerfile`) and
 DATABASE_URL=postgresql+asyncpg://...
 ```
 
-Note the `+asyncpg` driver prefix — Render hands you a `postgres://` URL and it
+Note the `+asyncpg` driver prefix - Render hands you a `postgres://` URL and it
 must be rewritten, or SQLAlchemy picks the sync driver and every request fails.
 
 Binding constraints, already designed against (see
@@ -128,7 +128,7 @@ code change is needed and the per-role models resolve automatically.
 
 > **This changes ingest behaviour, and it has never run.** Groq exposes no
 > vision model, so `vlm` is `None` there and Tier-2 page escalation has been
-> unavailable for every measurement this project has ever taken — visible as the
+> unavailable for every measurement this project has ever taken - visible as the
 > `degraded [unavailable] 1 page(s) needed a vision model` line in every ingest.
 > The Anthropic row sets `vlm`, so escalation **will** fire for the first time.
 >
@@ -157,9 +157,9 @@ PYTHONPATH=. poetry run python scripts/probe_golden_set.py      # every expected
 PYTHONPATH=. poetry run python scripts/verify_api.py            # full acceptance test, 32 checks
 ```
 
-`verify_api.py` is the one that proves the product works end to end: upload →
-ingest → hybrid retrieval → a citation resolving to literal characters in
-`normalized_text` → a pronoun follow-up resolving against memory → persistence →
+`verify_api.py` is the one that proves the product works end to end: upload ->
+ingest -> hybrid retrieval -> a citation resolving to literal characters in
+`normalized_text` -> a pronoun follow-up resolving against memory -> persistence ->
 the error taxonomy.
 
 ## Already verified, do not re-litigate
@@ -171,7 +171,7 @@ match, the error envelope matches `ApiErrorBody`, CORS returns the right header
 locally, and `sse.ts` correctly uses `fetch` + `ReadableStream` rather than
 `EventSource`. Nothing in the uncommitted frontend work needs a backend change.
 
-`GET/PUT /preferences` currently has no caller — that is expected. The settings
+`GET/PUT /preferences` currently has no caller - that is expected. The settings
 UI depends on Clerk, so it gains its consumer when step 2 lands.
 
 [[KnowledgeHub Index]] · [[Confirmed Infrastructure Constraints]] · [[Session Handoff 2026-07-29]]

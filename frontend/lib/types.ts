@@ -8,10 +8,10 @@
  *
  * Two invariants show up directly in these types and both matter:
  *
- * - `verified: boolean | null` — **null is not false.** A citation that has not
+ * - `verified: boolean | null` - **null is not false.** A citation that has not
  *   been checked, or whose judge failed, is `null`. Rendering that as
  *   "unsupported" would report a finding nobody made (I2).
- * - `attempt: 0 | 1` on `pipeline.stage` — stage events **repeat on the
+ * - `attempt: 0 | 1` on `pipeline.stage` - stage events **repeat on the
  *   corrective retry**. A UI keyed on `node` alone renders the retry as a
  *   duplicate; key on `(node, attempt)`.
  */
@@ -26,7 +26,7 @@ export type DocumentStatus =
   | "ready"
   | "failed";
 
-/** What G3 removed at ingest — surfaced so sanitisation is visible, not silent. */
+/** What G3 removed at ingest - surfaced so sanitisation is visible, not silent. */
 export interface SanitizationReport {
   removed_spans: number;
   kinds: Record<string, number>;
@@ -62,7 +62,7 @@ export interface DocumentSummary {
   created_at: string | null;
 }
 
-/** `normalized_text` is THE offset referent — every citation indexes into it. */
+/** `normalized_text` is THE offset referent - every citation indexes into it. */
 export interface DocumentDetail extends DocumentSummary {
   normalized_text: string;
 }
@@ -137,7 +137,7 @@ export interface TurnStartEvent extends FrameEnvelope {
   turn_id: string;
   message_id: string;
   /**
-   * The conversation this turn belongs to — minted by the server on a first
+   * The conversation this turn belongs to - minted by the server on a first
    * turn. Send it back on the next turn to thread conversation memory; without
    * it every turn starts a fresh conversation and follow-ups lose their history.
    */
@@ -147,7 +147,7 @@ export interface TurnStartEvent extends FrameEnvelope {
 export interface PipelineStageEvent extends FrameEnvelope {
   node: PipelineNode;
   state: "started" | "done";
-  /** 0 or 1. Key your UI on (node, attempt) — see the file header. */
+  /** 0 or 1. Key your UI on (node, attempt) - see the file header. */
   attempt: number;
   detail?: PipelineStageDetail;
 }
@@ -174,7 +174,7 @@ export interface AbstainEvent extends FrameEnvelope {
   searched: { doc_count: number; top_score: number };
 }
 
-/** Arrives after `answer.complete` — **or never**. Never block on it. */
+/** Arrives after `answer.complete` - **or never**. Never block on it. */
 export interface VerificationCompleteEvent extends FrameEnvelope {
   message_id: string;
   citations: { marker: number; verified: boolean | null }[];
@@ -229,7 +229,7 @@ export type IngestEvent =
 // -------------------------------------------------------------- messages
 
 /**
- * A citation as it comes back from `GET /conversations/{id}` — the same shape
+ * A citation as it comes back from `GET /conversations/{id}` - the same shape
  * a live turn's `Citation` has, plus the retrieval-trace columns
  * (`rank`/`fused_score`/`rerank_score`) that only `message_citations` carries.
  * Reloading a past conversation must produce citation chips that click through
@@ -262,7 +262,7 @@ export interface Conversation {
 // ----------------------------------------------------------- workspaces
 
 /**
- * A named group of documents that many conversations share — upload once,
+ * A named group of documents that many conversations share - upload once,
  * open as many chats against it as you like without re-attaching files.
  */
 export interface Workspace {

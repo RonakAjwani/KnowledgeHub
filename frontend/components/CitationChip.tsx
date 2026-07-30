@@ -6,17 +6,17 @@
  * The whole point of this component is that `verified` has **three** states and
  * they must look like three states (invariant I2):
  *
- * - `null`  — not yet checked, or the judge failed. This is what every citation
+ * - `null`  - not yet checked, or the judge failed. This is what every citation
  *   looks like at `answer.complete`, and what it stays as forever if
  *   verification never arrives. Neutral and quiet.
- * - `true`  — checked and supported. A small check, deliberately subtle: the
+ * - `true`  - checked and supported. A small check, deliberately subtle: the
  *   common case should not shout.
- * - `false` — checked and **not** supported by its source. Visibly flagged.
+ * - `false` - checked and **not** supported by its source. Visibly flagged.
  *
  * Collapsing `null` into `false` would put a warning on every citation of every
  * answer whose verification was slow, reporting a finding nobody made. So the
  * pending state uses a dashed neutral outline and the unsupported state uses a
- * filled amber chip with an icon — different at a glance, not just different in
+ * filled amber chip with an icon - different at a glance, not just different in
  * hue, which also keeps them apart for a colour-blind reader.
  */
 
@@ -45,7 +45,7 @@ function describeVerification(verified: boolean | null): string {
     case true:
       return "Verified against the source passage.";
     case false:
-      return "Not supported by the cited passage — check the source before relying on it.";
+      return "Not supported by the cited passage. Check the source before relying on it.";
     default:
       return "Not yet checked. Verification runs off the request path and may not have finished.";
   }
@@ -63,7 +63,6 @@ function CitationChipImpl({ citation, onClick, className }: CitationChipProps) {
       className={cn(
         "mx-px inline-flex translate-y-[-1px] items-center gap-0.5 rounded-md px-1.5 py-0 align-middle",
         "text-[0.7rem] font-medium leading-[1.4] tabular-nums transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500",
         verified === true &&
           "border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 dark:hover:bg-emerald-900/60",
         verified === false &&

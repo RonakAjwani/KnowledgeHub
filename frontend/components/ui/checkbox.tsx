@@ -11,7 +11,7 @@ export interface CheckboxProps
 }
 
 /**
- * A native checkbox rather than a Radix primitive — no Radix in the dependency
+ * A native checkbox rather than a Radix primitive - no Radix in the dependency
  * set, and `indeterminate` is DOM-only state that has to be set imperatively
  * either way.
  */
@@ -32,8 +32,7 @@ export function Checkbox({
       type="checkbox"
       className={cn(
         "size-4 shrink-0 cursor-pointer rounded border-zinc-300 [accent-color:var(--color-accent-600)]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-1",
-        "focus-visible:ring-offset-white dark:border-zinc-600 dark:[accent-color:var(--color-accent-500)] dark:focus-visible:ring-offset-zinc-950",
+        "dark:border-zinc-600 dark:[accent-color:var(--color-accent-500)]",
         "disabled:cursor-not-allowed disabled:opacity-40",
         className,
       )}

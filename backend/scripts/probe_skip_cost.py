@@ -12,8 +12,8 @@ traffic, and the threshold is wrong regardless of how much it saves.
 So this forces a Cohere call on exactly the queries that *would* have skipped
 and compares:
 
-  * top-1 agreement — does the reranker keep the same passage first?
-  * top-k overlap   — how much of the context set is the same either way?
+  * top-1 agreement - does the reranker keep the same passage first?
+  * top-k overlap   - how much of the context set is the same either way?
 
 Costs one Cohere call per decisive query (~22 of 53 here), against a
 1,000/month trial budget. Zero LLM calls.
@@ -49,7 +49,7 @@ async def main() -> int:
     engine = create_async_engine(settings.database_url)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
-    # decisive_ratio=99 so this reranker never takes the skip itself — the whole
+    # decisive_ratio=99 so this reranker never takes the skip itself - the whole
     # point is to see what the skipped queries were missing.
     forced = Reranker(settings.model_copy(update={"decisive_ratio": 99.0}))
 
@@ -82,7 +82,7 @@ async def main() -> int:
                 continue
 
             # Measured for *every* query with cross-branch agreement, not just
-            # those over the configured ratio — the goal is the agreement-vs-
+            # those over the configured ratio - the goal is the agreement-vs-
             # margin curve, which is what lets the threshold be chosen on
             # whether the skip is safe rather than on how much it saves.
             agreed, margin = is_decisive(candidates, 1.0)
@@ -93,7 +93,7 @@ async def main() -> int:
             candidates = await hydrate_candidates(session, EVAL_USER, candidates)
             outcome = await forced.rerank(question.text, candidates)
             if outcome.status is not RerankStatus.APPLIED:
-                continue  # rate limited or unavailable — not a measurement
+                continue  # rate limited or unavailable - not a measurement
 
             fused_ids = [c.chunk.id for c in candidates[:top_n]]
             rerank_ids = [c.chunk.id for c in outcome.candidates[:top_n]]
@@ -108,14 +108,14 @@ async def main() -> int:
     await engine.dispose()
 
     if not samples:
-        print("nothing measured — is the corpus ingested, and is COHERE_API_KEY set?")
+        print("nothing measured - is the corpus ingested, and is COHERE_API_KEY set?")
         return 1
 
     print(f"{len(samples)} queries with cross-branch agreement, of "
           f"{total_queries} total\n")
 
-    # For each candidate threshold: how many queries would skip, and — the
-    # number that actually matters — how often the reranker would have kept the
+    # For each candidate threshold: how many queries would skip, and - the
+    # number that actually matters - how often the reranker would have kept the
     # same top passage on exactly those skipped queries. A skip is only free if
     # that agreement is high; otherwise the threshold buys API budget with
     # answer quality, which is the wrong trade at any saving.
@@ -124,7 +124,7 @@ async def main() -> int:
     for ratio in (1.00, 1.01, 1.02, 1.03, 1.05, 1.10, 1.20, 1.50):
         skipped = [s for s in samples if s[0] >= ratio]
         if not skipped:
-            print(f"  {ratio:>6.2f} {0:>6}/{total_queries:<6} {'—':>14} {'—':>15}")
+            print(f"  {ratio:>6.2f} {0:>6}/{total_queries:<6} {'-':>14} {'-':>15}")
             continue
         agree = sum(1 for _, ok, _ in skipped if ok)
         overlap = statistics.mean(o for _, _, o in skipped)

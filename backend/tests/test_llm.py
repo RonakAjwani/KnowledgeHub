@@ -1,7 +1,7 @@
 """LLM adapter, limiters, cache, and Tier-2 escalation.
 
 No network. Provider request shapes are asserted against captured bodies, because
-the shapes differ in ways that fail loudly at runtime and silently in review —
+the shapes differ in ways that fail loudly at runtime and silently in review -
 Anthropic rejects `temperature` outright on current models, and takes `system` as
 a top-level field rather than a message role.
 """
@@ -245,7 +245,7 @@ async def test_missing_api_key_is_a_clear_error() -> None:
     ],
 )
 def test_tolerant_json_survives_the_ways_models_wrap_output(raw: str) -> None:
-    """Every caller of complete_json is on a fail-open path — being strict here
+    """Every caller of complete_json is on a fail-open path - being strict here
     turns a formatting quirk into a lost routing decision."""
     assert parse_json_tolerant(raw) == {"route": "retrieve"}
 
@@ -268,7 +268,7 @@ def test_a_bare_array_is_wrapped_when_the_caller_names_its_key(raw: str) -> None
 
     That is a correct reading of the request carrying exactly the information
     wanted, but it parsed to a list, failed the dict check, and left the
-    brace-scan with no ``{`` to find — so rewrite degraded to the raw query on
+    brace-scan with no ``{`` to find - so rewrite degraded to the raw query on
     every multi-part question and took query decomposition with it, silently.
     """
     assert parse_json_tolerant(raw, list_key="queries") == {"queries": ["a", "b"]}
@@ -343,7 +343,7 @@ async def test_rate_limiter_admits_up_to_the_ceiling_without_waiting() -> None:
 
 async def test_token_limiter_paces_on_tokens_not_calls() -> None:
     """Ten prose pages and ten scanned tables are ten calls either way and
-    wildly different token loads — which is why this limiter exists."""
+    wildly different token loads - which is why this limiter exists."""
     limiter = TokenBudgetLimiter(max_tokens_per_minute=1000)
     assert await limiter.acquire(600) == 0.0
     assert await limiter.acquire(300) == 0.0
@@ -356,7 +356,7 @@ async def test_token_limiter_never_deadlocks_on_an_oversized_request() -> None:
 
 
 def test_circuit_breaker_latches_and_reports_once() -> None:
-    """402 means the monthly quota is gone — retrying spends 2s per query to
+    """402 means the monthly quota is gone - retrying spends 2s per query to
     re-learn a known fact."""
     breaker = CircuitBreaker("cohere")
     assert breaker.is_tripped is False
@@ -549,7 +549,7 @@ def test_a_text_only_provider_reports_no_vision_model() -> None:
 
 async def test_a_429_is_retried_once_within_the_deadline() -> None:
     """Per-minute caps are routine on every free tier here, and the largest
-    prompts trip them first — so the requests most worth completing are the ones
+    prompts trip them first - so the requests most worth completing are the ones
     that fail. One short wait recovers them instead of raising a 503."""
     calls = {"n": 0}
 

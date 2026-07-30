@@ -22,7 +22,12 @@ const VARIANTS: Record<BadgeVariant, string> = {
     "bg-amber-50 text-amber-800 ring-amber-300 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30",
   danger:
     "bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30",
-  info: "bg-accent-50 text-accent-700 ring-accent-200 dark:bg-accent-500/10 dark:text-accent-300 dark:ring-accent-500/30",
+  // Neutral, not accent-tinted: this labels a *neutral fact* (which character
+  // range is cited), and it persists in the source-pane header the whole time
+  // a citation is open. Semantic colour is reserved for the states that carry
+  // real risk - success / warning / danger / derived below - and the accent
+  // for the one primary action per screen.
+  info: "bg-zinc-100 text-zinc-700 ring-zinc-300 dark:bg-zinc-800 dark:text-zinc-200 dark:ring-zinc-600",
   // Reserved for model-generated content, so "not from the document" reads the
   // same everywhere it appears.
   derived:

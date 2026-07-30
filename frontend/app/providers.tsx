@@ -5,7 +5,7 @@
  *
  * `ClerkProvider` is mounted **conditionally**. Without a publishable key the app
  * runs unauthenticated and the backend's `AUTH_MODE=dev` assigns every caller a
- * fixed user — which is what lets `docker compose up` work on a clean clone with
+ * fixed user - which is what lets `docker compose up` work on a clean clone with
  * no Clerk account. Mounting the provider regardless would render a sign-in wall
  * that nothing can satisfy.
  */
@@ -26,7 +26,7 @@ export function Providers({ children }: { children: ReactNode }) {
           queries: {
             staleTime: 10_000,
             retry: (failureCount, error) => {
-              // Don't retry the 4xx cases — a 404 or 415 will not become a 200.
+              // Don't retry the 4xx cases - a 404 or 415 will not become a 200.
               const status = (error as { status?: number })?.status;
               if (status && status >= 400 && status < 500) return false;
               return failureCount < 2;

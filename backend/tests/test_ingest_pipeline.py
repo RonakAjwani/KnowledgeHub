@@ -1,7 +1,7 @@
 """End-to-end ingest against real Qdrant and Postgres.
 
 Skipped automatically when the services are not up, so the suite still runs
-offline — but the guarantees here (write ordering, the deletion cascade,
+offline - but the guarantees here (write ordering, the deletion cascade,
 idempotency, tenant isolation) cannot be proven against a mock, because what they
 assert is precisely that two *different* systems agree.
 
@@ -48,7 +48,7 @@ async def _services_up() -> bool:
 @pytest_asyncio.fixture(scope="module")
 async def services():
     if not await _services_up():
-        pytest.skip("postgres/qdrant not running — `docker compose up -d postgres qdrant`")
+        pytest.skip("postgres/qdrant not running - `docker compose up -d postgres qdrant`")
     return True
 
 
@@ -168,7 +168,7 @@ async def test_ingest_reaches_ready_and_writes_both_stores(
     ).scalar_one()
     assert rows == result.chunk_count
 
-    # Qdrant side — the two stores must agree, which is the whole point of
+    # Qdrant side - the two stores must agree, which is the whole point of
     # mirroring rather than deriving one from the other.
     assert await store.count(user) == result.chunk_count
 
@@ -243,7 +243,7 @@ async def test_one_users_documents_are_invisible_to_another(
 async def test_doc_scoping_filters_to_the_selected_documents(
     pipeline, session, document, store
 ) -> None:
-    """The 'Multi-' in the project title — backed by a payload filter, not by
+    """The 'Multi-' in the project title - backed by a payload filter, not by
     post-filtering in application code."""
     user = f"u-{uuid.uuid4().hex[:8]}"
     doc_one = await document(user, CORPUS, "one.md")
@@ -311,7 +311,7 @@ async def test_duplicate_upload_is_found_by_hash(session, document) -> None:
 async def test_delete_cascades_to_both_stores(
     pipeline, session, document, store
 ) -> None:
-    """Deletion must actually delete — in both systems, not just the one the UI
+    """Deletion must actually delete - in both systems, not just the one the UI
     reads from."""
     user = f"u-{uuid.uuid4().hex[:8]}"
     doc = await document(user, CORPUS)
