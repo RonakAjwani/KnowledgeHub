@@ -54,10 +54,27 @@ each to its header, and a sparse row (two-wheeler has five values under six
 headers) cannot even be counted positionally. That page has *zero* detected
 tables, so it never reaches the Markdown path where alignment survives.
 
-Not fixed, deliberately. Extending borderless detection is the obvious move and
-this log already records why it is dangerous: text strategy alone finds 16
-tables where 1 exists and drops another document 50 -> 9. A measured limitation
-beats a same-day regression in the three documents that parse cleanly.
+**FIXED 2026-07-30** by recovering the columns from geometry rather than by
+widening pdfplumber's detection - which this log had measured as dangerous
+(text strategy alone finds 16 tables where 1 exists and drops another document
+50 -> 9). Numeric tables are right-aligned, and data rows agree on their right
+edge to within 1pt while their left edges differ by up to 24pt, so clustering
+right edges recovers the columns and the gap becomes visible:
+
+    | Macro-Economic Indicators | June-26 | May-26 | Apr-26 | ... |
+    | Two-wheeler sales (%YoY)  |         | 14.9   | 28.4   | ... |
+    | Manufacturing PMI         | 54.2    | 55.0   | 54.7   | ... |
+
+Re-measured after re-ingest: A2 now answers 56.9 for February (was 55.0, which
+is May's), and E2 declines instead of inventing 26.2% for the blank June cell.
+Word coverage is unchanged on every document including both held out from the
+corpus, so nothing was traded for it.
+
+Three gates, each added after a measurement went wrong: anchors are computed
+once per region (per-run derivation dropped the sparse column the fix exists
+for), only numeric rows define columns (clustering every word produced ~30
+spurious ones), and a table needs three rows and three columns with any
+non-binding line short enough to be a section label.
 
 ### Two bugs found in the measurement itself, both fixed
 
