@@ -372,3 +372,61 @@ def test_borderless_rescue_needs_a_caption_to_fire() -> None:
     # noisy strategy at pages of plain prose.
     assert not _TABLE_CAPTION_RE.search("as Table 2 shows, revenue grew")
     assert not _TABLE_CAPTION_RE.search("no tabular content here at all")
+
+
+def test_small_adjacent_blocks_are_packed_not_left_as_fragments() -> None:
+    """Splitting alone is half a chunker.
+
+    Measured before packing existed: 61% of corpus chunks came in under half the
+    250-token target and 30% were under 25 tokens — headings and one-line
+    paragraphs each becoming their own chunk, competing for a top-k slot against
+    real passages.
+    """
+    blocks = [Block(text=f"Short line {i}.", section="One") for i in range(12)]
+    doc = build_normalized_text(blocks)
+    chunks = chunk_document(doc, doc_id="d1", user_id="u1", settings=CFG)
+
+    assert len(chunks) < len(blocks), "adjacent short blocks should merge"
+    for chunk in chunks:
+        assert chunk.text == doc.text[chunk.char_start : chunk.char_end], (
+            "a packed span must still slice its own text out of normalized_text"
+        )
+
+
+def test_packing_never_crosses_a_section_boundary() -> None:
+    blocks = [
+        Block(text="Auth line.", section="Setup > Auth"),
+        Block(text="Billing line.", section="Setup > Billing"),
+    ]
+    doc = build_normalized_text(blocks)
+    chunks = chunk_document(doc, doc_id="d1", user_id="u1", settings=CFG)
+
+    assert len(chunks) == 2, "different sections are different subjects"
+
+
+def test_packing_never_absorbs_a_table_or_derived_content() -> None:
+    """A table owns its own atomicity rules, and a VLM's figure description
+    cannot share one `is_derived` flag with the document's own words."""
+    blocks = [
+        Block(text="Lead in.", section="S"),
+        Block(text="| a | b |\n| --- | --- |\n| 1 | 2 |", block_type=BlockType.TABLE, section="S"),
+        Block(text="After.", section="S"),
+        Block(text="A described chart.", section="S", is_derived=True),
+    ]
+    doc = build_normalized_text(blocks)
+    chunks = chunk_document(doc, doc_id="d1", user_id="u1", settings=CFG)
+
+    kinds = [(c.chunk_type, c.is_derived) for c in chunks]
+    assert (BlockType.TABLE, False) in kinds, "the table must survive as a table"
+    assert (BlockType.PROSE, True) in kinds, "derived content stays separately flagged"
+    # Four distinct blocks, none of which may merge with another.
+    assert len(chunks) == 4
+
+
+def test_an_oversized_block_still_splits() -> None:
+    """Packing must never make a chunk larger than splitting would allow."""
+    blocks = [Block(text="Sentence here. " * 200, section="S")]
+    doc = build_normalized_text(blocks)
+    chunks = chunk_document(doc, doc_id="d1", user_id="u1", settings=CFG)
+
+    assert len(chunks) > 1

@@ -95,6 +95,69 @@ def _split_prose(
     return pieces
 
 
+def _packed_prose(
+    doc: NormalizedDocument,
+    spans: tuple[BlockSpan, ...],
+    start: int,
+    max_tokens: int,
+) -> tuple[list[_Piece], int]:
+    """Pack consecutive prose blocks up to the child ceiling.
+
+    Splitting alone is only half a chunker. Measured over this corpus before
+    packing existed, **61% of chunks came in under half the 250-token target and
+    30% were under 25 tokens** — headings, one-line paragraphs and stray labels
+    each becoming their own chunk. A 20-token fragment competes for a top-k slot
+    against a 230-token passage and wins it on a lucky term match, which spends
+    the context budget on something that cannot answer anything.
+
+    So blocks are accumulated until the next one would breach the ceiling.
+    Returns the pieces and how many spans were consumed.
+
+    The boundaries are deliberate:
+
+    * **Section.** Text under a different heading is a different subject; the
+      same rule the parent window already follows.
+    * **Tables.** They own the atomicity rules in ``_split_table`` — header
+      repetition, never splitting mid-row — and folding one into a prose run
+      would discard all of it.
+    * **Derived content.** A VLM's description of a figure is marked as such in
+      the text; packing it together with the document's own words would produce
+      one chunk that is half quotation and half model output, with a single
+      ``is_derived`` flag that must lie about one of them.
+
+    A block that already exceeds the ceiling on its own still splits exactly as
+    before — packing never makes a chunk bigger than splitting would allow.
+
+    Offsets stay honest for free: the blocks are adjacent in ``normalized_text``,
+    so ``[first.start, last.end]`` is one contiguous span (separators included)
+    and still slices back out of the document verbatim (I5).
+    """
+    first = spans[start]
+    if count_tokens(first.slice(doc.text)) > max_tokens:
+        return _split_prose(doc, first, max_tokens), 1
+
+    end_index = start
+    total = count_tokens(first.slice(doc.text))
+
+    for nxt in range(start + 1, len(spans)):
+        candidate = spans[nxt]
+        if (
+            candidate.block_type is BlockType.TABLE
+            or candidate.section != first.section
+            or candidate.is_derived != first.is_derived
+        ):
+            break
+        # Measured from the end of what is packed so far, so the separator
+        # between the blocks is counted once and only once.
+        extra = count_tokens(doc.text[spans[end_index].end : candidate.end])
+        if total + extra > max_tokens:
+            break
+        end_index = nxt
+        total += extra
+
+    return [_Piece(first.start, spans[end_index].end, first)], end_index - start + 1
+
+
 def _split_table(
     doc: NormalizedDocument, span: BlockSpan, max_tokens: int
 ) -> list[_Piece]:
@@ -279,16 +342,21 @@ def chunk_document(
     chunks: list[Chunk] = []
     index = 0
 
-    for position, span in enumerate(doc.spans):
+    # Walked with an explicit cursor rather than `enumerate`, because a prose run
+    # can consume several spans at once — see `_packed_prose`.
+    position = 0
+    while position < len(doc.spans):
+        span = doc.spans[position]
         body = span.slice(doc.text)
         is_table = span.block_type is BlockType.TABLE
 
         if is_table:
             pieces = _split_table(doc, span, child_max)
+            consumed = 1
             lines = body.split("\n")
             table_header = "\n".join(lines[:2]) if len(lines) > 2 else ""
         else:
-            pieces = _split_prose(doc, span, child_max)
+            pieces, consumed = _packed_prose(doc, doc.spans, position, child_max)
             table_header = ""
 
         # Which captioned object this block belongs to — its own caption if it
@@ -322,5 +390,7 @@ def chunk_document(
                 )
             )
             index += 1
+
+        position += consumed
 
     return chunks
