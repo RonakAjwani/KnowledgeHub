@@ -62,6 +62,28 @@ _SPARSE_TEXT_CHARS_PER_KILOPIXEL = 0.02
 # nothing is being split that should not be.
 _X_TOLERANCE_RATIO = 0.15
 
+# Borderless-table recovery by column alignment. Right edges within this many
+# points are the same column: measured, two rows of the 360 ONE macro table
+# agree to within 1pt, so 3 is loose enough for rounding and far tighter than
+# the ~50pt spacing between real columns.
+_COLUMN_TOLERANCE = 3.0
+# How near a word's right edge must be to an anchor to belong to that column.
+# Wider than the clustering tolerance because a *header* is left-aligned over a
+# right-aligned numeric column and sits ~10pt off.
+_COLUMN_BIND_TOLERANCE = 16.0
+# A column needs only two members. The sparse column is the whole point: June
+# holds a value on just two rows of the macro table, and requiring three would
+# discard the exact column whose emptiness is being recovered.
+_MIN_COLUMN_MEMBERS = 2
+# The table itself still needs three aligned rows and three columns, so a
+# passing sentence with two figures in it cannot become a table.
+_MIN_TABLE_ROWS = 3
+_MIN_TABLE_COLUMNS = 3
+# A line inside a table that binds no column is a section label ("Consumption",
+# "Industrial Sector"). Allowed, but only when short - otherwise a paragraph
+# sitting under a table would be swallowed into it.
+_MAX_LABEL_WORDS = 4
+
 # "Table 2", "TABLE II", "Tab. 3" at the start of a line - the author's own
 # statement that a table is present. Anchored to line start so a passing mention
 # mid-sentence ("as Table 2 shows") does not trigger the fallback detector.
@@ -339,7 +361,41 @@ def _blocks_from_words(
             )
         buffer = []
 
-    for _, line_words in lines:
+    # Find maximal runs of column-aligned lines before emitting anything. Longest
+    # run first, so a table is not cut short by a shorter alignment inside it.
+    # Anchors come from every numeric row in the region, computed once. Deriving
+    # them per candidate run made a run that happened to exclude the two rows
+    # carrying a June figure produce five columns instead of six - and the
+    # missing column is exactly the sparse one this recovery exists for.
+    anchors = _column_anchors(lines)
+    table_at: dict[int, str] = {}
+    consumed: set[int] = set()
+    start = 0 if len(anchors) >= _MIN_TABLE_COLUMNS else len(lines)
+    while start <= len(lines) - _MIN_TABLE_ROWS:
+        for end in range(len(lines), start + _MIN_TABLE_ROWS - 1, -1):
+            markdown = _aligned_table(lines[start:end], anchors)
+            if markdown is not None:
+                table_at[start] = markdown
+                consumed.update(range(start, end))
+                start = end
+                break
+        else:
+            start += 1
+
+    for index, (_, line_words) in enumerate(lines):
+        if index in table_at:
+            flush()
+            blocks.append(
+                Block(
+                    text=table_at[index],
+                    block_type=BlockType.TABLE,
+                    section=_heading_path(stack),
+                    page=page_number,
+                )
+            )
+        if index in consumed:
+            continue
+
         # Left to right, always. Grouping tolerates a 2.5pt baseline difference
         # so a row's label and its figures land on one line, but the enclosing
         # sort is by (top, x0) - so figures set a fraction higher than their own
@@ -390,6 +446,107 @@ def _blocks_from_words(
 
     flush()
     return blocks
+
+
+_NUMERIC_CELL_RE = re.compile(r"^[(\[]?-?[\d][\d,.]*%?[)\]]?\*?$")
+
+
+def _numeric_count(words: list[dict]) -> int:
+    return sum(1 for w in words if _NUMERIC_CELL_RE.match(w["text"]))
+
+
+def _column_anchors(lines: list[tuple[float, list[dict]]]) -> list[float]:
+    """Right-edge positions shared by enough lines to be table columns.
+
+    Numeric tables are right-aligned, so a column's members agree on ``x1`` far
+    more tightly than on ``x0``. MEASURED on the 360 ONE macro table: the
+    Manufacturing PMI row ends its cells at 346/399/453/506/560 and the
+    two-wheeler row at 346/400/453/507/560 - within a point of each other -
+    while their left edges differ by up to 24pt because the numbers have
+    different widths.
+
+    A cluster has to appear on at least ``_MIN_COLUMN_ROWS`` lines. One line
+    with several numbers is a sentence containing figures; three lines whose
+    figures stop at the same x are a table.
+    """
+    edges = sorted(
+        w["x1"]
+        for _, ws in lines
+        if _numeric_count(ws) >= _MIN_TABLE_COLUMNS
+        for w in ws
+        if _NUMERIC_CELL_RE.match(w["text"])
+    )
+    clusters: list[list[float]] = []
+    for edge in edges:
+        if clusters and edge - clusters[-1][-1] <= _COLUMN_TOLERANCE:
+            clusters[-1].append(edge)
+        else:
+            clusters.append([edge])
+    return [
+        sum(c) / len(c) for c in clusters if len(c) >= _MIN_COLUMN_MEMBERS
+    ]
+
+
+def _as_table_row(words: list[dict], anchors: list[float]) -> tuple[list[str], int]:
+    """Place each word in the column its right edge lands in.
+
+    Returns the cells and how many words bound to a column. The first cell is
+    everything that bound to none - the row label. Unbound words are put there
+    rather than dropped, because losing a label is worse than an untidy one.
+    """
+    cells = [""] * (len(anchors) + 1)
+    bound = 0
+    for word in sorted(words, key=lambda w: w["x0"]):
+        distances = [abs(word["x1"] - a) for a in anchors]
+        best = min(range(len(anchors)), key=distances.__getitem__)
+        if distances[best] <= _COLUMN_BIND_TOLERANCE:
+            cells[best + 1] = (cells[best + 1] + " " + word["text"]).strip()
+            bound += 1
+        else:
+            cells[0] = (cells[0] + " " + word["text"]).strip()
+    return cells, bound
+
+
+def _aligned_table(
+    lines: list[tuple[float, list[dict]]], anchors: list[float]
+) -> str | None:
+    """Recover a borderless table from column alignment, or return None.
+
+    This exists because a blank cell is invisible once a row is flattened to
+    prose. MEASURED: the model answered 55.0 for February's PMI (that is May's
+    figure) and invented a two-wheeler number for a June cell that is empty. The
+    row reads "Two-wheeler sales (%YoY) 14.9 28.4 19.3 35.2 26.2" - five figures
+    under six month headers, with nothing saying which month is missing. No
+    prompt can recover that; the information is gone before the model sees it.
+
+    Emitting the columns keeps the gap visible, so an absent value stays absent
+    instead of shifting every later figure one month earlier.
+    """
+    if sum(1 for _, ws in lines if _numeric_count(ws) >= _MIN_TABLE_COLUMNS) < (
+        _MIN_TABLE_ROWS - 1
+    ):
+        return None
+
+    built = [(_as_table_row(ws, anchors), len(ws)) for _, ws in lines]
+    aligned = sum(1 for (_, bound), _ in built if bound >= 2)
+    if aligned < _MIN_TABLE_ROWS:
+        return None
+    # A line binding nothing is allowed only if it is short enough to be a
+    # section label. A full sentence under a table is prose, not a row.
+    if any(
+        bound < 2 and count > _MAX_LABEL_WORDS for (_, bound), count in built
+    ):
+        return None
+
+    rows = [cells for (cells, _), _ in built]
+    width = len(anchors) + 1
+    header, *body = rows
+    out = [
+        "| " + " | ".join(header) + " |",
+        "|" + "|".join(["---"] * width) + "|",
+    ]
+    out += ["| " + " | ".join(r) + " |" for r in body]
+    return "\n".join(out)
 
 
 def _table_bands(tables: list) -> list[tuple[list, float, float]]:

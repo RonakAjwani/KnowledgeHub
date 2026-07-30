@@ -296,3 +296,61 @@ def test_complexity_assessment_runs_on_every_page() -> None:
     assert len(result.assessments) == 2
     # A clean born-digital page with a readable table needs no escalation.
     assert result.complex_pages == []
+
+
+def make_sparse_table_pdf() -> bytes:
+    """A right-aligned numeric table whose first data row has a gap.
+
+    The shape of the 360 ONE macro table: six month columns, and a row that
+    carries a value for only five of them. Which month is missing is visible
+    only from the column positions.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    c.setFont("Helvetica", 9)
+
+    columns = [300, 360, 420, 480, 540]
+    for x, month in zip(columns, ["Jun", "May", "Apr", "Mar", "Feb"], strict=True):
+        c.drawRightString(x, 700, month)
+
+    c.drawString(60, 686, "Two-wheeler sales")
+    # No June figure. The remaining values sit under May..Feb.
+    for x, value in zip(columns[1:], ["14.9", "28.4", "19.3", "35.2"], strict=True):
+        c.drawRightString(x, 686, value)
+
+    c.drawString(60, 672, "Manufacturing PMI")
+    for x, value in zip(columns, ["54.2", "55.0", "54.7", "53.9", "56.9"], strict=True):
+        c.drawRightString(x, 672, value)
+
+    c.drawString(60, 658, "Energy Consumption")
+    for x, value in zip(columns, ["10.9", "11.0", "4.4", "0.7", "4.9"], strict=True):
+        c.drawRightString(x, 658, value)
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def test_a_blank_cell_survives_as_a_blank_cell() -> None:
+    """MEASURED: flattened to prose, this row read "Two-wheeler sales 14.9 28.4
+    19.3 35.2" and the model reported 14.9 as June's figure - it is May's. Every
+    later month shifted with it, and a blank cell became a confident wrong
+    answer no prompt could prevent."""
+    result = parse_document(make_sparse_table_pdf(), "application/pdf")
+    text = " ".join(b.text for b in result.blocks)
+
+    row = next(line for line in text.splitlines() if "Two-wheeler" in line)
+    cells = [c.strip() for c in row.strip("|").split("|")]
+
+    assert cells[1] == "", f"June must stay empty, got {cells[1]!r}"
+    assert cells[2] == "14.9", "14.9 belongs to May, the second column"
+
+
+def test_the_recovered_table_is_an_atomic_table_block() -> None:
+    """A recovered table has to reach the chunker as a TABLE, or the row-atomic
+    splitting and header repetition never apply to it."""
+    result = parse_document(make_sparse_table_pdf(), "application/pdf")
+
+    tables = [b for b in result.blocks if b.block_type is BlockType.TABLE]
+    assert tables, "the aligned rows should be recovered as a table block"
+    assert "Manufacturing PMI" in " ".join(b.text for b in tables)
