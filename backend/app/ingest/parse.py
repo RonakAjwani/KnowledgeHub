@@ -62,6 +62,13 @@ _SPARSE_TEXT_CHARS_PER_KILOPIXEL = 0.02
 # nothing is being split that should not be.
 _X_TOLERANCE_RATIO = 0.15
 
+# Narrowest strip beside a table that can hold a column of text, in points. The
+# 360 ONE factsheet's inter-table gutters are 3–4pt and its real side columns are
+# 135–200pt, so anything in between is a margin, not content. 20pt is roughly two
+# characters at body size: too narrow to hold a word, wide enough to keep every
+# genuine column in the corpus.
+_MIN_COLUMN_WIDTH = 20.0
+
 # "Table 2", "TABLE II", "Tab. 3" at the start of a line — the author's own
 # statement that a table is present. Anchored to line start so a passing mention
 # mid-sentence ("as Table 2 shows") does not trigger the fallback detector.
@@ -302,12 +309,32 @@ def _blocks_from_region(
     bottom: float,
     stack: list[tuple[int, str]],
     body_size: float,
+    left: float = 0.0,
+    right: float | None = None,
 ) -> list[Block]:
-    """Prose blocks from a vertical slice of a page, tracking headings."""
+    """Prose blocks from a rectangular slice of a page, tracking headings.
+
+    Horizontal bounds exist so a caller can read one *column* at a time. Lines
+    here are grouped by vertical position alone, so a full-width crop of a
+    multi-column page joins words that merely share a baseline — the region has
+    to be narrowed to a single column before the grouping means anything.
+    """
+    right = page.width if right is None else right
     if bottom - top < 2:
         return []
+    # A gutter narrower than this holds no words, only the gap between two
+    # columns. Cropping it yields nothing and costs a pdfplumber pass per table.
+    if right - left < _MIN_COLUMN_WIDTH:
+        return []
 
-    region = page.crop((0, max(top, 0), page.width, min(bottom, page.height)))
+    region = page.crop(
+        (
+            max(left, 0),
+            max(top, 0),
+            min(right, page.width),
+            min(bottom, page.height),
+        )
+    )
     words = (
         region.extract_words(
             extra_attrs=["size"], x_tolerance_ratio=_X_TOLERANCE_RATIO
@@ -386,6 +413,28 @@ def _blocks_from_region(
     return blocks
 
 
+def _table_bands(tables: list) -> list[tuple[list, float, float]]:
+    """Group tables that share a vertical range into one band.
+
+    Two tables printed side by side are one horizontal stripe of the page, not
+    two stacked ones. Walking them as if they were stacked makes the second
+    table's band start below the first, so everything level with them is read in
+    the wrong order or not at all.
+
+    Returns ``(tables, top, bottom)`` per band, in top-to-bottom order.
+    """
+    bands: list[tuple[list, float, float]] = []
+    for table in sorted(tables, key=lambda t: t.bbox[1]):
+        _, top, _, bottom = table.bbox
+        if bands and top < bands[-1][2]:
+            members, band_top, band_bottom = bands[-1]
+            members.append(table)
+            bands[-1] = (members, min(band_top, top), max(band_bottom, bottom))
+        else:
+            bands.append(([table], top, bottom))
+    return bands
+
+
 def parse_pdf(data: bytes) -> ParseResult:
     blocks: list[Block] = []
     assessments: list[PageAssessment] = []
@@ -422,26 +471,49 @@ def parse_pdf(data: bytes) -> ParseResult:
             # tables. This is what preserves reading order: a table's explanation
             # usually sits immediately above or below it, and emitting all prose
             # then all tables would separate them.
+            #
+            # Within a band, walk left to right as well. Skipping straight from a
+            # table's top to its bottom discards whatever is printed *beside* it,
+            # and on a multi-column page that is a whole column: measured on the
+            # 360 ONE factsheet it deleted the entire "Fund Details" box —
+            # manager, AUM, expense ratio, benchmark — from all 20 fund pages.
             cursor = 0.0
-            for table in sorted(tables, key=lambda t: t.bbox[1]):
-                x0, top, x1, bottom = table.bbox
+            for band_tables, band_top, band_bottom in _table_bands(tables):
                 blocks.extend(
-                    _blocks_from_region(page, cursor, top, stack, body_size)
+                    _blocks_from_region(page, cursor, band_top, stack, body_size)
                 )
 
-                rows = table.extract(x_tolerance_ratio=_X_TOLERANCE_RATIO) or []
-                markdown = _table_to_markdown(rows)
-                if markdown:
-                    tables_found += 1
-                    blocks.append(
-                        Block(
-                            text=markdown,
-                            block_type=BlockType.TABLE,
-                            section=_heading_path(stack),
-                            page=page.page_number,
+                x_cursor = 0.0
+                for table in sorted(band_tables, key=lambda t: t.bbox[0]):
+                    x0, _, x1, _ = table.bbox
+                    blocks.extend(
+                        _blocks_from_region(
+                            page, band_top, band_bottom, stack, body_size,
+                            left=x_cursor, right=x0,
                         )
                     )
-                cursor = bottom
+
+                    rows = table.extract(x_tolerance_ratio=_X_TOLERANCE_RATIO) or []
+                    markdown = _table_to_markdown(rows)
+                    if markdown:
+                        tables_found += 1
+                        blocks.append(
+                            Block(
+                                text=markdown,
+                                block_type=BlockType.TABLE,
+                                section=_heading_path(stack),
+                                page=page.page_number,
+                            )
+                        )
+                    x_cursor = max(x_cursor, x1)
+
+                blocks.extend(
+                    _blocks_from_region(
+                        page, band_top, band_bottom, stack, body_size,
+                        left=x_cursor, right=page.width,
+                    )
+                )
+                cursor = band_bottom
 
             blocks.extend(
                 _blocks_from_region(page, cursor, page.height, stack, body_size)

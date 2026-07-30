@@ -140,6 +140,61 @@ def test_reading_order_keeps_prose_around_its_table() -> None:
     assert "enterprise contracts" in after
 
 
+def make_two_column_pdf() -> bytes:
+    """A narrow table with a text column printed beside it, at the same height.
+
+    This is the shape of every fund fact-page in the 360 ONE factsheet: a
+    portfolio table down the middle, a "Fund Details" box to its left. Carving
+    prose only out of the vertical gaps *between* tables skips the whole column.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+
+    c.setFont("Helvetica", 11)
+    # Left column — level with the table, not above or below it.
+    c.drawString(60, 600, "Fund Manager Ms. Ada Lovelace")
+    c.drawString(60, 584, "Net AUM 6634.45 crore")
+    c.drawString(60, 568, "Expense Ratio 1.54%")
+    # Right column, also level with the table.
+    c.drawString(430, 600, "Sector Allocation 32.16%")
+
+    _draw_table(
+        c,
+        220,
+        620,
+        [["holding", "weight"], ["ICICI Bank", "9.25"], ["Bharti Airtel", "6.03"]],
+        col_width=90,
+    )
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def test_text_beside_a_table_is_not_dropped() -> None:
+    """Measured on the real corpus: this discarded 50% of the 360 ONE factsheet,
+    including every fund's manager, AUM and expense ratio."""
+    result = parse_document(make_two_column_pdf(), "application/pdf")
+    text = " ".join(b.text for b in result.blocks)
+
+    assert "Ada Lovelace" in text
+    assert "6634.45" in text
+    assert "Expense Ratio 1.54%" in text
+    assert "Sector Allocation 32.16%" in text
+
+
+def test_a_side_column_is_read_as_its_own_column_not_merged_across_the_page() -> None:
+    """Recovering the text is not enough if it comes back interleaved.
+
+    Lines are grouped by vertical position, so a full-width crop would join
+    "Fund Manager Ms. Ada Lovelace" to "Sector Allocation 32.16%" — they share a
+    baseline. Each column has to be cropped before the grouping happens.
+    """
+    result = parse_document(make_two_column_pdf(), "application/pdf")
+    prose = [b.text for b in result.blocks if b.block_type is BlockType.PROSE]
+
+    assert any("Ada Lovelace" in b and "Sector Allocation" not in b for b in prose)
+
+
 def test_empty_pdf_fails_loudly_rather_than_indexing_nothing() -> None:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
