@@ -96,9 +96,20 @@ next person tunes a floor that was never the problem.
 
 - **D6** answered the MathModDB half of a two-intent question and dropped the
   LegalKG half. First hard evidence on the `fuse.py` interleave-vs-RRF item.
-- **M1**'s follow-up ("Who manages it?") found nothing, though the parse fix
-  demonstrably recovered `Mayur Patel` and `Viral Mehta`. Coreference resolves,
-  retrieval does not.
+- **A3 and M1 are CLOSED.** A3 asked for one fund's Net AUM and got another's,
+  because the chunk holding it read "Net AUM : 6,634.45 crore" under the section
+  "AUM as on June 30, 2026" - both identical on nineteen other fund pages, so
+  nothing distinguished them and the answer chunk sat at rank 28 of 40. Fixed by
+  nesting headings by font size (the page title is 22pt over 7-9pt sub-headings)
+  and prepending the section path to the *embedded* text only. A3 now answers
+  6,634.45 crore at relevance 0.971, the highest in the set. M1's follow-up
+  reaches "Mr. Mayur Patel" through a pronoun.
+- **A fourth grader was wrong before the pipeline was.** M1 was scored a failure
+  while answering both turns correctly: the runner compared the LAST turn's text
+  against `must_include`, which describes the FIRST turn, so a question about a
+  manager was checked for an AUM figure. Each turn is now graded against its own
+  expectation. Every one of the four graders found wrong this session moved the
+  number *down* - check the grader before the pipeline.
 - **F2** abstained at relevance 0.064 on "summarize what langchain.md is" - an
   over-refusal on a question the corpus plainly answers.
 - **D1** is the only retrieval miss: needed `langchain.md`, got MathModDB only.

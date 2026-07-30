@@ -72,6 +72,8 @@ resistance is model behaviour, not only prompt structure.
   every real turn. `7/68 -> 14/67`.
 - **Qdrant had no retry.** DNS to the managed cluster failed 1 in 12 attempts,
   killing an ingest and a delete. 31/32 -> 32/32.
+- **A chunk now carries its page's heading in the embedded text**, which is
+  what made twenty near-identical fund pages distinguishable at all.
 - **Source pane renders the uploaded format** - PDFs via pdf.js, Markdown
   rendered - with the exact-offset text view kept as a second tab.
 
@@ -95,9 +97,8 @@ resistance is model behaviour, not only prompt structure.
 - **D5** (which manager appears across the most fund pages) is unanswerable by
   top-k retrieval by construction. Kept in the set labelled, to be measured, not
   fixed. Avoid it in a demo.
-- **A3** reads a different fund's AUM row - retrieval precision across 20
-  near-identical fact-pages. Untested since the table fix; different root cause,
-  so do not expect that fix to have helped.
+- **A3 is fixed** (chunks now carry their page's heading, so the twenty fund
+  pages are distinguishable). Answers 6,634.45 crore at relevance 0.971.
 - The **highlight in the source pane's Original tab is best-effort**: it matches
   cited text against pdf.js's text layer because no bounding boxes are
   persisted. The Text tab's highlight is offset-driven and cannot be wrong.
