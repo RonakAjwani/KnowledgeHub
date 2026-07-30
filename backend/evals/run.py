@@ -55,6 +55,14 @@ from evals.questions import QUESTIONS, Expect, Question
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+# Windows consoles default to cp1252, and models emit typographic whitespace —
+# gpt-oss-20b writes "July 2026" with a narrow no-break space. Printing an
+# answer then kills the run *after* the LLM tokens were spent, losing every
+# result behind it. Degrade the character rather than the run.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 EVAL_USER = "eval-user"
 RESULTS_DIR = pathlib.Path(__file__).resolve().parents[2] / "evals" / "results"
 
@@ -74,6 +82,18 @@ _DECLINE_MARKERS = (
     "not disclosed",
     "not stated",
     "not reported",
+    # The inflected forms. "not reported" was present and "do not report" was
+    # not, so E6 — "The documents you provided do not report an F1 score" — was
+    # scored as a hallucination for declining exactly as intended. A refusal the
+    # grader cannot see is worse than no grader: it moves the number in the
+    # direction that flatters nothing and blames the wrong stage.
+    "do not report",
+    "does not report",
+    "doesn't report",
+    "did not report",
+    "do not provide",
+    "does not provide",
+    "not include",
     "no information",
     "not available in",
     "cannot answer",
