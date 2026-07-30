@@ -422,6 +422,34 @@ def test_claims_split_line_aware_for_bullets() -> None:
     assert revenue.markers == [1], "must not absorb the next bullet's marker"
 
 
+def test_markers_after_the_terminator_belong_to_that_sentence() -> None:
+    """Models put the citation after the full stop: "…2026. [1][3]".
+
+    The sentence splitter breaks on the terminator, so the markers arrive as
+    their own piece. Dropping it loses the citation and leaves a properly cited
+    claim looking uncited — measured on the eval set, this reported 7 of 68
+    claims as carrying any citation when most of them did.
+    """
+    claims = split_claims("MathModDB contains 229 curated models as of 2026. [1][3]")
+
+    assert len(claims) == 1, "the marker fragment is not a claim of its own"
+    assert claims[0].markers == [1, 3]
+
+
+def test_a_marker_fragment_on_its_own_line_still_attaches() -> None:
+    claims = split_claims("Revenue reached $8M in Q3.\n[2]")
+
+    assert len(claims) == 1
+    assert claims[0].markers == [2]
+
+
+def test_a_leading_marker_fragment_attaches_to_nothing() -> None:
+    """With no preceding claim there is nothing to attribute it to, and
+    inventing one would fabricate a claim the model never made."""
+    assert split_claims("[1] Revenue reached $8M in Q3.")[0].markers == [1]
+    assert split_claims("[1]") == []
+
+
 async def test_union_of_cited_sources_is_sent_once() -> None:
     """A sentence citing [1][2] draws on both; judging separately fails both."""
     seen: list[str] = []

@@ -96,9 +96,25 @@ def split_claims(answer: str) -> list[Claim]:
         line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", line)
         for sentence in _SENTENCE_SPLIT_RE.split(line):
             sentence = sentence.strip()
-            if not sentence or not is_factual_claim(sentence):
+            if not sentence:
                 continue
             markers = [int(m) for m in CITATION_MARKER_RE.findall(sentence)]
+
+            if not is_factual_claim(sentence):
+                # A fragment that is *only* markers is the citation for the
+                # sentence it follows. Models routinely place it after the
+                # terminator — "…as of July 2026. [1][3]" — and the sentence
+                # splitter then hands the markers back as their own piece.
+                # Dropping it loses the citation and leaves the claim looking
+                # uncited, which is the same mispairing this module already
+                # guards against for bullet lists. MEASURED on the 22-question
+                # set: it reported 7 of 68 factual claims as carrying any
+                # citation, and that number was an artifact rather than a
+                # finding.
+                if markers and claims:
+                    claims[-1].markers.extend(markers)
+                continue
+
             claims.append(Claim(text=sentence, markers=markers))
 
     return claims
