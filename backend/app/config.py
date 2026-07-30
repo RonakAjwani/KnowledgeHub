@@ -127,6 +127,23 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     groq_api_key: str = ""
 
+    # Per-minute token ceilings, keyed by model id. MEASURED off Groq's own
+    # `x-ratelimit-limit-tokens` header on 2026-07-30, not assumed — the caps
+    # differ per model and each model meters its own bucket.
+    #
+    # A model absent from this table is not paced. Guessing a ceiling for a
+    # provider whose limits nobody measured would be a safeguard in name only,
+    # and would throttle a paid key that has no such cap.
+    tpm_limits: dict[str, int] = Field(
+        default_factory=lambda: {
+            "llama-3.3-70b-versatile": 12_000,
+            "llama-3.1-8b-instant": 6_000,
+            "qwen/qwen3.6-27b": 8_000,
+            "openai/gpt-oss-20b": 8_000,
+            "openai/gpt-oss-120b": 8_000,
+        }
+    )
+
     # Per-role model routing stays a config string. Latency-critical mechanical
     # roles get the fastest model; generation gets the strongest; judges run off
     # the request path and can be anything.

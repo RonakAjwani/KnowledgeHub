@@ -41,7 +41,9 @@ from typing import Any, Literal
 import httpx
 
 from app.config import Settings, get_settings
+from app.ingest.tokens import count_tokens
 from app.llm.cache import get_cache
+from app.llm.limiter import TokenBudgetLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,32 @@ class LLMTimeout(LLMError):
 
 _MAX_RATE_LIMIT_RETRIES = 1
 _DEFAULT_RATE_LIMIT_WAIT_S = 2.0
+
+
+def _estimate_request_tokens(body: dict[str, Any], max_tokens: int) -> int:
+    """What this request will cost against a per-minute allowance.
+
+    Providers meter ``max_tokens`` as *reserved* output — it is spent whether or
+    not the answer uses it — so the cost of a call is the prompt plus the full
+    reservation, not the prompt plus the answer actually returned. Budgeting on
+    the prompt alone under-counts by up to ``max_tokens`` per call, which is
+    most of the request at these sizes.
+
+    The heuristic counter is used deliberately: this is a pacing decision, and
+    loading a tokenizer on the request path to refine an estimate that only has
+    to be roughly right would cost more than the imprecision does.
+    """
+    text: list[str] = []
+    for message in body.get("messages", []):
+        content = message.get("content")
+        if isinstance(content, str):
+            text.append(content)
+        elif isinstance(content, list):
+            text.extend(p.get("text", "") for p in content if isinstance(p, dict))
+    system = body.get("system")
+    if isinstance(system, str):
+        text.append(system)
+    return count_tokens("\n".join(text), exact=False) + max_tokens
 
 
 def _retry_after_seconds(response: httpx.Response) -> float:
@@ -252,6 +280,40 @@ class LLMClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._client: httpx.AsyncClient | None = None
+        # One budget per model, because the caps are per model and so are the
+        # buckets. Sharing a limiter across models would pace the generation
+        # model against the route model's spend and vice versa.
+        self._tpm: dict[str, TokenBudgetLimiter] = {}
+
+    async def _pace(self, model: str, body: dict[str, Any], max_tokens: int) -> None:
+        """Wait until this request fits inside the model's per-minute budget.
+
+        MEASURED: without this, a back-to-back run of the 22-question eval
+        completed **2 of 22** — every other question died as
+        ``DependencyUnavailable``. Generation reserves ~6k tokens against a
+        12,000 TPM cap, so two calls exhaust the minute; the third 429s and
+        falls back to the smaller model, which route and rewrite have already
+        drained below *its* 6,000 cap, so the safety net fails at exactly the
+        moment it is needed and the turn returns a 503.
+
+        Waiting is the correct behaviour rather than a workaround: the request
+        is going to be admissible in a few seconds, and a bounded wait is a
+        better answer than an error the caller cannot act on. It is also not a
+        degradation — nothing was lost, so no `Degradation` is recorded (I1
+        governs fallbacks, not pacing).
+
+        Unmetered models are not paced. Inventing a ceiling for a provider whose
+        limits nobody measured would be guessing dressed as a safeguard.
+        """
+        budget = self.settings.tpm_limits.get(model, 0)
+        if budget <= 0:
+            return
+        limiter = self._tpm.get(model)
+        if limiter is None:
+            limiter = self._tpm[model] = TokenBudgetLimiter(budget, name=model)
+        waited = await limiter.acquire(_estimate_request_tokens(body, max_tokens))
+        if waited:
+            logger.info("paced %s for %.1fs to stay inside %d TPM", model, waited, budget)
 
     # -- provider wiring ---------------------------------------------------
 
@@ -393,6 +455,11 @@ class LLMClient:
             if hit is not None:
                 return str(hit)
 
+        # After the cache check: a hit costs the provider nothing and must not
+        # consume budget. Before the retry loop: a retry is the same request,
+        # already accounted for.
+        await self._pace(model, body, max_tokens)
+
         deadline = time.monotonic() + timeout
         attempt = 0
         while True:
@@ -486,6 +553,7 @@ class LLMClient:
             stream=True,
         )
         family = self._family
+        await self._pace(model, body, max_tokens)
         deadline = time.monotonic() + timeout
         attempt = 0
 
