@@ -230,6 +230,14 @@ def cite_support(
     cited = [c for c in claim_list if c.markers]
     dangling = sum(1 for c in cited for m in c.markers if m not in by_marker)
 
+    # A derived answer is *computed* from retrieved values, so it is absent from
+    # the source by construction — B6's "46" is a subtraction and appears
+    # nowhere in LegalKG. Checking it would score a correct citation as a
+    # miscitation every time, which is the metric failing rather than the
+    # pipeline.
+    if question.derived:
+        return len(claim_list), len(cited), dangling, 0, 0
+
     checked = supported = 0
     for needle in (question.must_include_all or question.must_include):
         for claim in claim_list:

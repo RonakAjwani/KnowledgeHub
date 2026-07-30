@@ -17,6 +17,78 @@ Started 2026-07-29.
 | `rerank.py` conditional skip | Skip rate re-confirmed at 42% post-re-ingest. Then `probe_skip_cost.py` forced Cohere on every agreement query: at 1.02 the reranker promotes a *different* top passage 29% of the time, and top-5 overlap never exceeds 56% at **any** threshold. | **Disabled** (`DECISIVE_RATIO=99`). The premise — agreement means a cross-encoder won't overturn it — is false here. Budget it protects doesn't bind under 1,000 queries; mechanism stays configurable. |
 | `chunk.py` sizing | 61% of chunks under half the 250-token target, median 54, 30.6% under 25 tokens. `_split_prose` split oversized blocks but nothing packed undersized ones. | **Fixed.** `_packed_prose` merges adjacent same-section prose. Median 54 → 110, chunks 1222 → 1054, zero offset violations. |
 
+## 2026-07-30 — the first end-to-end accuracy measurement
+
+Measured on the curated 22-question set against the 4-document corpus.
+**Generation model was `openai/gpt-oss-20b`, not the configured default** —
+`llama-3.3-70b-versatile` had exhausted its daily cap (`TPD: 100000, Used
+99606`), which the per-minute header does not expose. The numbers describe that
+model; re-run on the deployed provider before quoting them anywhere.
+
+| Measurement | Result |
+|---|---|
+| Retrieval — every needed document reached the context | **16/17** |
+| Answer — correct where retrieval succeeded | **10/16** |
+| Refusal — declined when the corpus does not hold the answer | **4/5** |
+| Citation — stated fact present in the passage its own claim cites | **7/13** |
+| G4 coverage — factual claims carrying any citation | **14/67** |
+
+**Retrieval is not the bottleneck; generation is.** The right passage was in
+front of the model 94% of the time and it still got six of those wrong. Splitting
+the three measurements is what made that visible — a single "accuracy: 59%"
+would have sent the next session to tune retrieval, which is the one stage
+already working.
+
+### The dominant failure has one root cause
+
+A2 answered `55.0` for Manufacturing PMI in **February**; E2 hallucinated
+`26.2%` for a June cell that is **blank**. Both numbers are real values from the
+same row, in the wrong column:
+
+    Macro-Economic Indicators  June-26 May-26 Apr-26 Mar-26 Feb-26 Jan-26
+    Manufacturing PMI            54.2   55.0   54.7   53.9   56.9   55.4
+
+55.0 is May; 26.2 is January. **The parse is correct and the binding is still
+lost**: flattened to prose, a row is a sequence of numbers with nothing tying
+each to its header, and a sparse row (two-wheeler has five values under six
+headers) cannot even be counted positionally. That page has *zero* detected
+tables, so it never reaches the Markdown path where alignment survives.
+
+Not fixed, deliberately. Extending borderless detection is the obvious move and
+this log already records why it is dangerous: text strategy alone finds 16
+tables where 1 exists and drops another document 50 → 9. A measured limitation
+beats a same-day regression in the three documents that parse cleanly.
+
+### Two bugs found in the measurement itself, both fixed
+
+- **`split_claims` dropped trailing citations.** Models write `"…as of July
+  2026. [1][3]"`; the sentence splitter broke on the terminator and discarded
+  the marker fragment. Coverage read `7/68` — an artifact. This is production
+  code (`Verifier.verify` uses it), so G4 under-reported on every real turn and
+  left checkable citations `null` (I2). Fixed: coverage `7/68 → 14/67`,
+  supported citations `5/14 → 7/14`, dangling `1 → 0`.
+- **The decline grader missed an inflection.** `"not reported"` was present,
+  `"do not report"` was not, so E6 was scored a hallucination for declining
+  exactly as designed. Refusal `3/5 → 4/5`.
+
+Both moved the number *down* before they were found. A grader that cannot see a
+correct refusal does not flatter the system — it blames the wrong stage, and the
+next person tunes a floor that was never the problem.
+
+### Still open, with evidence now attached
+
+- **D6** answered the MathModDB half of a two-intent question and dropped the
+  LegalKG half. First hard evidence on the `fuse.py` interleave-vs-RRF item.
+- **M1**'s follow-up ("Who manages it?") found nothing, though the parse fix
+  demonstrably recovered `Mayur Patel` and `Viral Mehta`. Coreference resolves,
+  retrieval does not.
+- **F2** abstained at relevance 0.064 on "summarize what langchain.md is" — an
+  over-refusal on a question the corpus plainly answers.
+- **D1** is the only retrieval miss: needed `langchain.md`, got MathModDB only.
+- **D5** abstained as the labelled expected-hard case. Aggregation over a whole
+  corpus is outside top-k's reach by construction; it is in the set to be
+  measured, not to be fixed.
+
 ## Not yet measured
 
 Listed so the gap is visible rather than implied-complete:
