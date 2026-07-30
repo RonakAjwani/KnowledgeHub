@@ -48,13 +48,23 @@ QUERY = "ZX9-4471 pressure valve coolant"
 
 
 async def main() -> int:
+    # The URL comes from configuration, not a literal. This probe exists to be
+    # re-run against whatever Qdrant is actually in use — a managed cluster on a
+    # different version can rank from a different base, and RRF_MAX together
+    # with every threshold derived from it would silently mean nothing (I7).
+    # Hardcoding localhost made the probe answer a question nobody asked: it
+    # reported a healthy verdict for the local container while the application
+    # was pointed at a cloud cluster it had never touched.
+    configured = Settings()
     settings = Settings(
-        qdrant_url="http://localhost:6333",
+        qdrant_url=configured.qdrant_url,
+        qdrant_api_key=configured.qdrant_api_key,
         qdrant_collection=f"probe_rrf_{uuid.uuid4().hex[:8]}",
         rrf_k=60,
         w_dense=1.0,
         w_sparse=1.0,
     )
+    print(f"probing {settings.qdrant_url}\n")
     store = QdrantStore(settings)
     embedder = Embedder(settings)
     user = "probe-user"
