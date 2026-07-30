@@ -22,13 +22,16 @@ import asyncio
 import functools
 import json
 import pathlib
+import re
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings
+from app.db import models as db
 from app.graph.build import build_graph
 from app.graph.nodes import (
     Deps,
@@ -45,6 +48,7 @@ from app.memory.conversation import load_memory
 from app.retrieval.hydrate import hydrate_candidates
 from app.retrieval.qdrant_store import QdrantStore
 from app.retrieval.rerank import Reranker
+from evals.corpus import BY_FILENAME, BY_KEY
 from evals.questions import QUESTIONS, Expect, Question
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -97,6 +101,25 @@ class Outcome:
     answer: str
     missing: list[str]
     degradations: list[str]
+    # Which generation model answered. Recorded because eval load is spread
+    # across Groq's per-model daily buckets, and an accuracy number that mixes
+    # models without saying so is not a number about this pipeline.
+    model: str = ""
+    # Did retrieval put a chunk from every document the question needs into the
+    # context the model actually saw? Separates "retrieval missed it" from "the
+    # passage was there and the model did not use it" — the two failures a
+    # single accuracy score collapses into one.
+    docs_expected: list[str] = field(default_factory=list)
+    retrieved_expected: bool = True
+
+
+# doc_id -> corpus key, resolved once from Postgres at startup. Without it
+# `docs_cited` was an eight-character uuid prefix nobody could map to a file.
+DOC_KEYS: dict[str, str] = {}
+
+
+def doc_key(doc_id: str) -> str:
+    return DOC_KEYS.get(doc_id, doc_id[:8])
 
 
 def looks_like_decline(answer: str, grade: str) -> bool:
@@ -104,6 +127,28 @@ def looks_like_decline(answer: str, grade: str) -> bool:
         return True
     lowered = answer.lower()
     return any(marker in lowered for marker in _DECLINE_MARKERS)
+
+
+_NUMERIC = re.compile(r"^\d[\d,.]*$")
+
+
+def present(needle: str, answer_lower: str) -> bool:
+    """Is this expected fact in the answer?
+
+    Text is matched as a plain substring — the model's phrasing is its own.
+    Numbers are matched on a **number boundary**, because a raw substring test
+    silently inflates the score: "75" is inside "175", "46" is inside "460", and
+    "0.7" is inside "0.75". Every one of those is a different fact, and several
+    of them appear in this corpus. Thousands separators are optional on both
+    sides, so a golden "6,634" is satisfied by an answer that writes "6634".
+    """
+    needle = needle.strip()
+    if not _NUMERIC.match(needle):
+        return needle.lower() in answer_lower
+    variants = {needle, needle.replace(",", "")}
+    return any(
+        re.search(rf"(?<![\d.]){re.escape(v)}(?!\d)", answer_lower) for v in variants
+    )
 
 
 def grade_answer(question: Question, answer: str, grade: str) -> tuple[bool, bool, list[str]]:
@@ -116,9 +161,16 @@ def grade_answer(question: Question, answer: str, grade: str) -> tuple[bool, boo
         return declined, declined, []
 
     lowered = answer.lower()
-    missing = [s for s in question.must_include if s.lower() not in lowered]
-    # `must_include` is a disjunction: any one hit means the fact is present.
-    hit = len(missing) < len(question.must_include) if question.must_include else True
+    # `must_include_all` is a conjunction — every part of a multi-part question
+    # has to be answered. `must_include` is a disjunction: any one hit means the
+    # fact is present, under a different wording.
+    missing = [s for s in question.must_include_all if not present(s, lowered)]
+    hit = not missing
+    if question.must_include:
+        absent = [s for s in question.must_include if not present(s, lowered)]
+        if len(absent) == len(question.must_include):
+            missing += absent
+            hit = False
     return (hit and not declined), declined, missing
 
 
@@ -159,6 +211,7 @@ async def run_retrieval_only(
     passed = declined if question.expect is Expect.DECLINE else not declined
 
     used = state.get("candidates", [])[: context_budget(state, settings)]
+    cited = sorted({doc_key(c.chunk.doc_id) for c in used})
     return Outcome(
         id=question.id,
         section=question.section,
@@ -170,11 +223,14 @@ async def run_retrieval_only(
         rerank_status=state.get("rerank_status", ""),
         sub_queries=1,
         citations=len(used),
-        docs_cited=sorted({c.chunk.doc_id[:8] for c in used}),
+        docs_cited=cited,
         latency_s=round(elapsed, 1),
         answer="",
         missing=[],
         degradations=[f"{d.stage}/{d.reason}" for d in state.get("degradations", [])],
+        model="",
+        docs_expected=list(question.docs),
+        retrieved_expected=set(question.docs) <= set(cited),
     )
 
 
@@ -216,6 +272,7 @@ async def run_question(
     passed, declined, missing = grade_answer(question, answer, grade)
 
     used = result.get("candidates", [])[: context_budget(result, settings)]
+    cited = sorted({doc_key(c.chunk.doc_id) for c in used})
     return Outcome(
         id=question.id,
         section=question.section,
@@ -227,12 +284,52 @@ async def run_question(
         rerank_status=result.get("rerank_status", ""),
         sub_queries=len(result.get("effective_queries") or [1]),
         citations=len(used),
-        docs_cited=sorted({c.chunk.doc_id[:8] for c in used}),
+        docs_cited=cited,
         latency_s=round(elapsed, 1),
         answer=answer.replace("\n", " ")[:400],
         missing=missing,
         degradations=[f"{d.stage}/{d.reason}" for d in result.get("degradations", [])],
+        model=settings.llm_model_generate,
+        docs_expected=list(question.docs),
+        retrieved_expected=set(question.docs) <= set(cited),
     )
+
+
+async def _resolve_corpus(maker, selected: list[Question]) -> int:
+    """Map ingested doc ids to corpus keys, and refuse to run on a wrong corpus.
+
+    A question naming a document that is not ingested fails exactly like a
+    retrieval miss. That confusion cost a session once already, so it is now an
+    up-front error rather than a mystery in the results table.
+    """
+    async with maker() as session:
+        rows = await session.execute(
+            select(db.Document).where(
+                db.Document.user_id == EVAL_USER, db.Document.status == "ready"
+            )
+        )
+        documents = rows.scalars().all()
+
+    ingested: set[str] = set()
+    for document in documents:
+        entry = BY_FILENAME.get(document.filename)
+        if entry is None:
+            print(f"ingested but not declared in evals.corpus: {document.filename}")
+            return 1
+        DOC_KEYS[str(document.id)] = entry.key
+        ingested.add(entry.key)
+
+    wanted = {key for question in selected for key in question.docs}
+    unknown = wanted - set(BY_KEY)
+    if unknown:
+        print(f"questions name undeclared documents: {sorted(unknown)}")
+        return 1
+    absent = wanted - ingested
+    if absent:
+        print(f"questions need documents that are not ingested: {sorted(absent)}")
+        print("run: PYTHONPATH=. poetry run python scripts/ingest_corpus.py --reset")
+        return 1
+    return 0
 
 
 async def main() -> int:
@@ -242,6 +339,12 @@ async def main() -> int:
     parser.add_argument("--floor-fused", type=float)
     parser.add_argument("--floor-rerank", type=float)
     parser.add_argument("--tag", default="run", help="label for the results file")
+    parser.add_argument(
+        "--generate-model",
+        help="pin the generation model, e.g. qwen/qwen3.6-27b. Groq meters each "
+        "model on its own daily bucket, so an iteration run can be paid for out "
+        "of a different one than the headline number",
+    )
     parser.add_argument(
         "--retrieval-only",
         action="store_true",
@@ -258,6 +361,7 @@ async def main() -> int:
             for k, v in (
                 ("floor_fused", args.floor_fused),
                 ("floor_rerank", args.floor_rerank),
+                ("llm_model_generate", args.generate_model),
             )
             if v is not None
         },
@@ -280,8 +384,15 @@ async def main() -> int:
     engine = create_async_engine(settings.database_url)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
+    if await _resolve_corpus(maker, selected) != 0:
+        await llm.aclose()
+        await reranker.aclose()
+        await store.aclose()
+        await engine.dispose()
+        return 1
+
     print(
-        f"running {len(selected)} questions  "
+        f"running {len(selected)} questions  model={settings.llm_model_generate}  "
         f"floor_fused={settings.floor_fused} floor_rerank={settings.floor_rerank}\n"
     )
     print(f"{'id':<5} {'exp':<8} {'res':<5} {'grade':<8} {'rel':>6} {'rerank':<17} "
@@ -410,6 +521,25 @@ def _summarise(outcomes: list[Outcome]) -> None:
         declined = sum(o.passed for o in refusals)
         print(f"unanswerable  {declined}/{len(refusals)} correctly declined"
               f"   ({len(refusals) - declined} hallucinated)")
+
+    # The split that a single accuracy score hides. Retrieval is scored on
+    # whether every document the question needs contributed a chunk to the
+    # context the model actually saw; generation is scored only on the questions
+    # where it did, because a generator cannot answer from a passage it was
+    # never given.
+    scoped = [o for o in answerable if o.docs_expected]
+    if scoped:
+        found = [o for o in scoped if o.retrieved_expected]
+        print(f"\nretrieval     {len(found)}/{len(scoped)} had every needed "
+              f"document in context")
+        if found:
+            print(f"generation    {sum(o.passed for o in found)}/{len(found)} "
+                  f"correct where retrieval succeeded")
+        starved = [o for o in scoped if not o.retrieved_expected]
+        if starved:
+            for outcome in starved:
+                print(f"  retrieval miss  {outcome.id:<5} "
+                      f"needed {outcome.docs_expected} got {outcome.docs_cited}")
 
     # The two distributions the floors have to separate. If they overlap, no
     # single threshold can do the job and the problem is upstream of tuning.

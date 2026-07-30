@@ -33,6 +33,7 @@ from app.ingest.embed import Embedder
 from app.ingest.pipeline import IngestPipeline, content_sha256, find_existing_document
 from app.llm.client import LLMClient
 from app.retrieval.qdrant_store import QdrantStore
+from evals.corpus import CORPUS, EXCLUDED, FILENAMES
 
 CORPUS_DIR = pathlib.Path(__file__).resolve().parents[2] / "document corpus"
 EVAL_USER = "eval-user"
@@ -74,12 +75,21 @@ async def main() -> int:
 
     await store.ensure_collection(dense_dim=embedder.dense_dimension)
 
-    files = sorted(p for p in CORPUS_DIR.iterdir() if p.suffix in MIME_BY_SUFFIX)
-    if not files:
-        print(f"no documents found in {CORPUS_DIR}")
+    # The corpus is what ``evals.corpus`` declares, not whatever happens to sit
+    # in the directory. Dropping a file into `document corpus/` used to silently
+    # widen the evaluation set; now it is ignored until it is declared.
+    files = sorted(p for p in CORPUS_DIR.iterdir() if p.name in FILENAMES)
+    missing = FILENAMES - {p.name for p in files}
+    if missing:
+        print(f"declared but not on disk: {sorted(missing)}")
         return 1
 
-    print(f"ingesting {len(files)} documents into '{EVAL_COLLECTION}'\n")
+    print(f"ingesting {len(files)} declared documents into '{EVAL_COLLECTION}'")
+    for doc in CORPUS:
+        print(f"  {doc.key:<10} {doc.filename}")
+    for name in sorted(EXCLUDED):
+        print(f"  {'(excluded)':<10} {name}")
+    print()
     total_chunks = 0
 
     async with maker() as session:
