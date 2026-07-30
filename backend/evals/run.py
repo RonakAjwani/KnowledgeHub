@@ -36,12 +36,14 @@ from app.graph.build import build_graph
 from app.graph.nodes import (
     Deps,
     _search,
+    build_generate_messages,
     context_budget,
     grade_node,
     rerank_node,
     retrieve_node,
 )
 from app.graph.state import Grade, initial_state
+from app.graph.verify import split_claims
 from app.ingest.embed import Embedder
 from app.llm.client import LLMClient
 from app.memory.conversation import load_memory
@@ -111,6 +113,12 @@ class Outcome:
     # single accuracy score collapses into one.
     docs_expected: list[str] = field(default_factory=list)
     retrieved_expected: bool = True
+    # --- citation faithfulness (measured without a judge; see cite_support)
+    claims: int = 0
+    claims_cited: int = 0
+    dangling: int = 0
+    facts_checked: int = 0
+    facts_supported: int = 0
 
 
 # doc_id -> corpus key, resolved once from Postgres at startup. Without it
@@ -172,6 +180,48 @@ def grade_answer(question: Question, answer: str, grade: str) -> tuple[bool, boo
             missing += absent
             hit = False
     return (hit and not declined), declined, missing
+
+
+def cite_support(
+    question: Question,
+    answer: str,
+    by_marker: dict[int, str],
+    text_by_id: dict[str, str],
+) -> tuple[int, int, int, int, int]:
+    """Does [n] actually support the sentence it is attached to?
+
+    Returns ``(claims, claims_cited, dangling, facts_checked, facts_supported)``.
+
+    ``verify_api.py`` already proves a citation resolves to real characters in
+    ``normalized_text``. That is a different question from whether those
+    characters *back the claim* — a marker pointing at a real but irrelevant
+    passage passes the resolution check and is still a false citation.
+
+    Measured **without a judge**, deliberately. For every expected fact the
+    answer actually states, find the claim stating it and check that *that
+    claim's own* citations contain the fact. A number is either in the cited
+    passage or it is not, so the measurement does not move when the generation
+    model changes, and a judge sharing the pipeline's model cannot launder its
+    own mistakes into a score. The cost is coverage, not correctness: it can
+    only check facts the golden set names, which is why `facts_checked` is
+    reported next to `facts_supported` rather than folded into a ratio.
+    """
+    claim_list = split_claims(answer)
+    cited = [c for c in claim_list if c.markers]
+    dangling = sum(1 for c in cited for m in c.markers if m not in by_marker)
+
+    checked = supported = 0
+    for needle in (question.must_include_all or question.must_include):
+        for claim in claim_list:
+            if not present(needle, claim.text.lower()):
+                continue
+            checked += 1
+            evidence = " ".join(
+                text_by_id.get(by_marker[m], "") for m in claim.markers if m in by_marker
+            )
+            supported += present(needle, evidence.lower())
+            break
+    return len(claim_list), len(cited), dangling, checked, supported
 
 
 async def run_retrieval_only(
@@ -273,6 +323,20 @@ async def run_question(
 
     used = result.get("candidates", [])[: context_budget(result, settings)]
     cited = sorted({doc_key(c.chunk.doc_id) for c in used})
+
+    # Re-derive the marker -> chunk map with the same pure function `generate`
+    # used, so the mapping is the real one rather than a reconstruction. No LLM
+    # call: build_generate_messages only assembles a prompt.
+    _, chunk_ids = build_generate_messages(result)
+    by_marker = {i + 1: cid for i, cid in enumerate(chunk_ids)}
+    text_by_id = {
+        c.chunk.id: (c.chunk.parent_text or c.chunk.text)
+        for c in result.get("candidates", [])
+    }
+    claims, claims_cited, dangling, checked, supported = cite_support(
+        question, answer, by_marker, text_by_id
+    )
+
     return Outcome(
         id=question.id,
         section=question.section,
@@ -292,6 +356,11 @@ async def run_question(
         model=settings.llm_model_generate,
         docs_expected=list(question.docs),
         retrieved_expected=set(question.docs) <= set(cited),
+        claims=claims,
+        claims_cited=claims_cited,
+        dangling=dangling,
+        facts_checked=checked,
+        facts_supported=supported,
     )
 
 
@@ -540,6 +609,24 @@ def _summarise(outcomes: list[Outcome]) -> None:
             for outcome in starved:
                 print(f"  retrieval miss  {outcome.id:<5} "
                       f"needed {outcome.docs_expected} got {outcome.docs_cited}")
+
+    # Citation faithfulness. `verify_api.py` proves a citation resolves to real
+    # characters; this asks whether those characters back the claim.
+    checked = sum(o.facts_checked for o in answerable)
+    if checked:
+        supported = sum(o.facts_supported for o in answerable)
+        claims = sum(o.claims for o in answerable)
+        claims_cited = sum(o.claims_cited for o in answerable)
+        dangling = sum(o.dangling for o in answerable)
+        print(f"\ncitations     {supported}/{checked} stated facts are actually "
+              f"present in the passage that claim cites")
+        print(f"              {claims_cited}/{claims} factual claims carry any "
+              f"citation (G4 coverage)")
+        print(f"              {dangling} citation(s) point at no candidate")
+        bad = [o for o in answerable if o.facts_supported < o.facts_checked]
+        for outcome in bad:
+            print(f"  unsupported cite  {outcome.id:<5} "
+                  f"{outcome.facts_supported}/{outcome.facts_checked}")
 
     # The two distributions the floors have to separate. If they overlap, no
     # single threshold can do the job and the problem is upstream of tuning.
