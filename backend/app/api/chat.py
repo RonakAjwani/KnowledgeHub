@@ -276,8 +276,17 @@ async def _serialise_message(
     chunk_ids = {row.chunk_id for row in citation_rows}
     chunks: dict[str, db.Chunk] = {}
     if chunk_ids:
+        # Scoped by user_id as well as id. The ids come from this user's own
+        # message_citations, so the filter is redundant today - which is exactly
+        # why it belongs here. I3 says there is no unscoped read path, and a
+        # query that is safe only because of what a caller happens to pass is
+        # safe by discipline rather than by construction. Chunk rows carry
+        # document text; a future bug that let a foreign chunk_id into
+        # message_citations would leak it.
         chunk_result = await session.execute(
-            select(db.Chunk).where(db.Chunk.id.in_(chunk_ids))
+            select(db.Chunk).where(
+                db.Chunk.id.in_(chunk_ids), db.Chunk.user_id == user_id
+            )
         )
         chunks = {c.id: c for c in chunk_result.scalars().all()}
 

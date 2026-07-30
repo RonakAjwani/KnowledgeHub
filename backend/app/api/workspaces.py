@@ -52,12 +52,28 @@ async def _owned(session: AsyncSession, user_id: str, workspace_id: str) -> db.W
     return workspace
 
 
-async def _counts(session: AsyncSession, workspace_id: str) -> tuple[int, int]:
+async def _counts(
+    session: AsyncSession, user_id: str, workspace_id: str
+) -> tuple[int, int]:
+    """Both counts, scoped by user_id as well as workspace.
+
+    Every caller reaches this after _owned_workspace has already rejected a
+    foreign id, so the extra predicate changes no result today. It is here
+    because I3 is meant to hold by construction: a helper that takes an id
+    without the owner is one refactor away from being called before the
+    ownership check, and it would then report a stranger's document count.
+    """
     docs = await session.execute(
-        select(db.Document.id).where(db.Document.workspace_id == workspace_id)
+        select(db.Document.id).where(
+            db.Document.workspace_id == workspace_id,
+            db.Document.user_id == user_id,
+        )
     )
     convos = await session.execute(
-        select(db.Conversation.id).where(db.Conversation.workspace_id == workspace_id)
+        select(db.Conversation.id).where(
+            db.Conversation.workspace_id == workspace_id,
+            db.Conversation.user_id == user_id,
+        )
     )
     return len(docs.all()), len(convos.all())
 
@@ -86,7 +102,7 @@ async def list_workspaces(
     workspaces = result.scalars().all()
     out = []
     for workspace in workspaces:
-        doc_count, convo_count = await _counts(session, workspace.id)
+        doc_count, convo_count = await _counts(session, user_id, workspace.id)
         out.append(_serialise(workspace, document_count=doc_count, conversation_count=convo_count))
     return out
 
@@ -96,7 +112,7 @@ async def get_workspace(
     workspace_id: str, user_id: UserId, session: AsyncSession = Depends(get_session)
 ) -> dict:
     workspace = await _owned(session, user_id, workspace_id)
-    doc_count, convo_count = await _counts(session, workspace_id)
+    doc_count, convo_count = await _counts(session, user_id, workspace_id)
     return _serialise(workspace, document_count=doc_count, conversation_count=convo_count)
 
 
@@ -110,7 +126,7 @@ async def rename_workspace(
     workspace = await _owned(session, user_id, workspace_id)
     workspace.name = request.name
     await session.commit()
-    doc_count, convo_count = await _counts(session, workspace_id)
+    doc_count, convo_count = await _counts(session, user_id, workspace_id)
     return _serialise(workspace, document_count=doc_count, conversation_count=convo_count)
 
 
