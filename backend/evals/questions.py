@@ -67,6 +67,12 @@ class Question:
     derived: bool = False
     # Follow-up turns, for the multi-turn cases.
     follow_ups: tuple[str, ...] = field(default_factory=tuple)
+    # What the FINAL follow-up must contain. Without this the runner graded the
+    # last turn's answer against `must_include`, which describes the first
+    # turn - so M1 answered both turns correctly and still failed, because
+    # "Who manages it?" does not mention an AUM figure. A multi-turn question
+    # has to be graded per turn or it measures nothing about coreference.
+    follow_up_must_include: tuple[str, ...] = ()
 
 
 QUESTIONS: list[Question] = [
@@ -181,7 +187,8 @@ QUESTIONS: list[Question] = [
              "What is the 360 ONE Focused Fund's Net AUM?",
              Expect.ANSWER, ("6,634", "6634"), ("360ONE",),
              note="the follow-up's pronoun is meaningless without the antecedent",
-             follow_ups=("Who manages it?",)),
+             follow_ups=("Who manages it?",),
+             follow_up_must_include=("Mayur Patel", "Mehta")),
 
     # ================================================================
     # NEGATIVE CONTROLS - the correct answer is a refusal.

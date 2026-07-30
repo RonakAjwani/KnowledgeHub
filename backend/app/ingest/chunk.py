@@ -297,6 +297,34 @@ def _governing_label(
     return None
 
 
+# A heading component longer than this is a sentence the font size happened to
+# flag, not a title. MEASURED: the 360 ONE fact pages set the scheme description
+# - "(An open ended equity scheme investing in maximum 30 multicap stocks)", 69
+# characters - at 9pt over a 6pt body, so it passes the size test and lands in
+# the path. Prepended to a 90-character AUM chunk it is most of the embedded
+# text, shared verbatim with every other chunk on the page, and it pushed the
+# chunk holding the answer from rank 28 down rather than up.
+_MAX_HEADING_COMPONENT_CHARS = 48
+
+
+def _embeddable_heading(section: str | None) -> str | None:
+    """The part of a section path worth embedding: the title-like components.
+
+    Dropping a component keeps the ones around it - "Fund > <description> >
+    AUM" becomes "Fund > AUM" rather than being abandoned - because the outer
+    title is the piece that identifies which of twenty near-identical pages a
+    chunk belongs to, and it is usually the shortest.
+    """
+    if not section:
+        return None
+    kept = [
+        part.strip()
+        for part in section.split(" > ")
+        if 0 < len(part.strip()) <= _MAX_HEADING_COMPONENT_CHARS
+    ]
+    return " > ".join(kept) or None
+
+
 def _chunk_text_for(
     doc: NormalizedDocument,
     piece: _Piece,
@@ -311,10 +339,26 @@ def _chunk_text_for(
     words describe the table better than a model's would.
     """
     body = doc.text[piece.start : piece.end]
+
+    # The section path is prepended to what gets embedded, never to the stored
+    # span. Offsets keep indexing `normalized_text` exactly (I5) - this string
+    # is the retrieval unit, not the citation unit.
+    #
+    # MEASURED: a chunk reading "Net AUM : 6,634.45 crore" is textually
+    # identical to the same line on nineteen other fund pages, so a question
+    # naming one fund could not select between them and the answer came back
+    # with another fund's figure. The page title is the only thing that tells
+    # them apart, and until now it was recorded as metadata the embedding never
+    # saw.
+    heading = _embeddable_heading(piece.span.section)
+    prefix = f"{heading}\n" if heading and not body.lstrip().startswith(heading) else ""
+
     if piece.span.block_type is not BlockType.TABLE:
-        return body
+        return f"{prefix}{body}"
 
     parts: list[str] = []
+    if prefix:
+        parts.append(prefix.rstrip("\n"))
     lead = build_lead_line(doc, reference)
     if lead:
         parts.append(lead)

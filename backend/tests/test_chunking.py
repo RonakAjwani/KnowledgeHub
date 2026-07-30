@@ -177,8 +177,13 @@ def test_every_chunk_slices_back_out_of_normalized_text() -> None:
     for chunk in chunks:
         sliced = doc.text[chunk.char_start : chunk.char_end]
         assert sliced, "empty chunk span"
-        # Prose chunks embed their span verbatim.
-        assert chunk.text == sliced
+        # A prose chunk's embedded text is its span prefixed by the section
+        # path, so it *ends with* the span rather than equalling it. The
+        # prefix is a retrieval aid and never reaches the stored offsets - a
+        # chunk reading "Net AUM : 6,634.45 crore" is identical to the same
+        # line on nineteen other fund pages, and only the heading tells them
+        # apart.
+        assert chunk.text.endswith(sliced)
 
 
 def test_parent_always_contains_its_child() -> None:
@@ -388,7 +393,7 @@ def test_small_adjacent_blocks_are_packed_not_left_as_fragments() -> None:
 
     assert len(chunks) < len(blocks), "adjacent short blocks should merge"
     for chunk in chunks:
-        assert chunk.text == doc.text[chunk.char_start : chunk.char_end], (
+        assert chunk.text.endswith(doc.text[chunk.char_start : chunk.char_end]), (
             "a packed span must still slice its own text out of normalized_text"
         )
 

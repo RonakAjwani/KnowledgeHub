@@ -25,7 +25,7 @@ import pathlib
 import re
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -324,6 +324,8 @@ async def run_question(
         raw_query=question.text,
     )
     result = await graph.ainvoke(state)
+    first_answer = result.get("answer", "")
+    first_grade = str(result.get("grade", ""))
 
     # Multi-turn questions continue in the same conversation with the memory the
     # first turn produced.
@@ -347,7 +349,21 @@ async def run_question(
     elapsed = time.time() - started
     answer = result.get("answer", "")
     grade = str(result.get("grade", ""))
-    passed, declined, missing = grade_answer(question, answer, grade)
+
+    # A multi-turn question is graded on the turn each expectation describes.
+    # `must_include` is the opening turn's fact; the follow-up carries its own.
+    if question.follow_ups:
+        opening_ok, _, opening_missing = grade_answer(question, first_answer, first_grade)
+        probe = replace(
+            question,
+            must_include=question.follow_up_must_include,
+            must_include_all=(),
+        )
+        follow_ok, declined, follow_missing = grade_answer(probe, answer, grade)
+        passed = opening_ok and follow_ok
+        missing = opening_missing + follow_missing
+    else:
+        passed, declined, missing = grade_answer(question, answer, grade)
 
     used = result.get("candidates", [])[: context_budget(result, settings)]
     cited = sorted({doc_key(c.chunk.doc_id) for c in used})

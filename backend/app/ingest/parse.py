@@ -84,6 +84,14 @@ _MIN_TABLE_COLUMNS = 3
 # sitting under a table would be swallowed into it.
 _MAX_LABEL_WORDS = 4
 
+# Deepest heading path kept. Generous on purpose: the useful component is not
+# reliably the outermost one. On the 360 ONE factsheet the root is a
+# document-wide "FACTSHEET" banner and the fund name sits a level below it, so
+# an aggressive cap discards the one heading that says which of twenty
+# near-identical pages a chunk belongs to. Noise is filtered by length where it
+# matters - see _embeddable_heading in chunk.py - rather than by depth here.
+_MAX_HEADING_DEPTH = 6
+
 # "Table 2", "TABLE II", "Tab. 3" at the start of a line - the author's own
 # statement that a table is present. Anchored to line start so a passing mention
 # mid-sentence ("as Table 2 shows") does not trigger the fallback detector.
@@ -445,8 +453,33 @@ def _blocks_from_words(
             # Font size gives no real nesting depth, so headings are treated as a
             # flat single level. A wrong guess at hierarchy is worse than none:
             # it would put "Appendix" under "Introduction".
-            stack.clear()
-            stack.append((1, text.strip()))
+            # Nest by font size instead of flattening. `stack.clear()` made
+            # every heading replace the last, so a page title was overwritten by
+            # the first sub-label under it and the chunks below carried the
+            # sub-label alone as their section.
+            #
+            # MEASURED on the 360 ONE factsheet, page 7: the title
+            # "360 ONE FOCUSED FUND" is set at 22pt and every sub-heading under
+            # it at 7-9pt, so the levels separate cleanly. Flattening left the
+            # chunk holding that fund's AUM with section "AUM as on June 30,
+            # 2026" - a string identical on all twenty fund pages, which is why
+            # a question naming one fund retrieved another's figure.
+            #
+            # Levels are the negated size, so a larger heading sorts *higher*
+            # and the same pop rule the Markdown path uses applies unchanged:
+            # a heading pops every open heading at its own size or smaller.
+            level = -round(size * 10)
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, text.strip()))
+            # Trim the MIDDLE when the path gets deep, never the front. An
+            # earlier version deleted from the front and threw away the page
+            # title - the one component that says which of twenty near-identical
+            # fund pages a chunk belongs to, and the whole reason for nesting
+            # headings at all. The root and the most specific levels are the two
+            # ends worth keeping; what sits between them is the least useful.
+            if len(stack) > _MAX_HEADING_DEPTH:
+                del stack[1 : len(stack) - _MAX_HEADING_DEPTH + 1]
             blocks.append(
                 Block(
                     text=text.strip(),
