@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     )
 
     # ---------------------------------------------------------------- runtime
-    app_env: Literal["local", "docker", "render"] = "local"
+    app_env: Literal["local", "docker", "azure"] = "local"
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:3000"
 
@@ -123,8 +123,9 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = "chunks"
 
-    # Render's free Postgres ships no managed pooling and may restart without
-    # notice, so the app owns its pool and survives a dropped connection.
+    # Managed Postgres (Azure Database for PostgreSQL Flexible Server, free tier)
+    # may still restart without notice, so the app owns its pool and survives a
+    # dropped connection rather than assuming managed pooling in front of it.
     db_pool_size: int = 5
     db_max_overflow: int = 2
 

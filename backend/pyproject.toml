@@ -34,8 +34,8 @@ dependencies = [
 package-mode = false
 
 # deepeval and the test toolchain never enter the runtime image. The Dockerfile
-# runs `poetry install --no-root --only main`, which is what keeps the image
-# inside the 512 MB Render ceiling.
+# runs `poetry install --no-root --only main`, which is what keeps the runtime
+# image small and cold starts fast.
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0,<10.0"
 pytest-asyncio = ">=0.24,<2.0"

@@ -90,9 +90,10 @@ class Document(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # Contract §2 names this blob_ref. The resolution was Postgres bytea rather
-    # than a path, because Render's filesystem is ephemeral and a stored path
-    # would resolve to a missing file within the hour - so the "reference" is the
-    # bytes. Download-only: no citation, highlight or verification path reads it.
+    # than a path, because container filesystems in this deployment are ephemeral
+    # and a stored path would resolve to a missing file after a restart - so the
+    # "reference" is the bytes. Download-only: no citation, highlight or
+    # verification path reads it.
     blob_ref: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     # THE offset referent. Every char_start/char_end in the system indexes into

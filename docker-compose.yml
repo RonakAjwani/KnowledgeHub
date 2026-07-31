@@ -1,9 +1,10 @@
 # KnowledgeHub - full local stack.
 #
-# This file is the durable deliverable: Render's free Postgres is deleted 44 days
-# after creation, so Compose is what still works after the live link dies. It must
-# stay in parity with the deployed setup - if a service gets an env var in Render,
-# it gets one here too.
+# This file is the durable deliverable: managed free-tier Postgres instances
+# (Render's was deleted 44 days after creation; Azure's free tier has its own
+# limits) are not permanent, so Compose is what still works after a live link
+# dies. It must stay in parity with the deployed setup - if a service gets an
+# env var in the cloud deployment, it gets one here too.
 #
 #   docker compose up --build
 #
@@ -63,8 +64,8 @@ services:
       # defaults that local `poetry run` development uses.
       QDRANT_URL: http://qdrant:6333
       DATABASE_URL: postgresql+asyncpg://knowledgehub:knowledgehub@postgres:5432/knowledgehub
-      # 0.1 vCPU on Render means threaded BLAS costs more in contention than it
-      # buys in throughput. Set here too so Compose reproduces the deployed shape.
+      # Threaded BLAS costs more in contention than it buys in throughput on a
+      # low-vCPU container. Set here too so Compose reproduces the deployed shape.
       OMP_NUM_THREADS: "1"
       AUTH_MODE: dev
       CORS_ORIGINS: http://localhost:3000

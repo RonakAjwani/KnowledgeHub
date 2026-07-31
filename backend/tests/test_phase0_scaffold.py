@@ -176,7 +176,7 @@ def test_dev_auth_is_refused_outside_local_environments() -> None:
     assert_auth_mode_safe(Settings(auth_mode="dev", app_env="docker"))
 
     with pytest.raises(RuntimeError, match="not permitted"):
-        assert_auth_mode_safe(Settings(auth_mode="dev", app_env="render"))
+        assert_auth_mode_safe(Settings(auth_mode="dev", app_env="azure"))
 
 
 def test_clerk_mode_requires_a_secret_key() -> None:
@@ -184,7 +184,7 @@ def test_clerk_mode_requires_a_secret_key() -> None:
 
     with pytest.raises(RuntimeError, match="CLERK_SECRET_KEY"):
         assert_auth_mode_safe(
-            Settings(auth_mode="clerk", app_env="render", clerk_secret_key="")
+            Settings(auth_mode="clerk", app_env="azure", clerk_secret_key="")
         )
 
 

@@ -1,9 +1,10 @@
 """Ingest orchestration: upload -> parse -> sanitize -> chunk -> embed -> upsert.
 
-Runs as an in-process background task. Not a separate worker service - that would
-be a second Render service, and 750 free instance-hours per month fits exactly
-one. So ingest shares the API process and its 512 MB ceiling, which is why the
-embedding batch size matters and why escalation is paced rather than fanned out.
+Runs as an in-process background task rather than a separate worker service - a
+decision made against Render's free-tier instance-hour cap and kept on Azure
+Container Apps for simplicity, since nothing about the pipeline needs a second
+process. Ingest shares the API process, so the embedding batch size still
+matters and escalation is still paced rather than fanned out.
 
 **Two orderings in here are load-bearing and both are easy to reverse by accident.**
 

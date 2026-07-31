@@ -1,7 +1,7 @@
 # Multi-stage: the dev dependency group (deepeval, pytest, ruff, mypy) is resolved
 # but never installed into the runtime image. deepeval alone pulls a large
-# transitive tree, and the whole deployment target is a 512 MB box — keeping it
-# out of the final layer is what makes the ceiling reachable.
+# transitive tree, and keeping it out of the final layer keeps image size and
+# cold-start time down regardless of the memory ceiling on the deploy target.
 
 FROM python:3.12-slim AS builder
 
@@ -28,8 +28,10 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
-    # 0.1 vCPU: threaded BLAS inside onnxruntime costs more in contention than it
-    # buys in throughput, and each extra thread carries its own arena.
+    # On a low-vCPU container, threaded BLAS inside onnxruntime costs more in
+    # contention than it buys in throughput, and each extra thread carries its
+    # own arena. Kept at 1 unless the deploy target's vCPU allocation is raised
+    # enough to make threaded BLAS worth it.
     OMP_NUM_THREADS=1 \
     FASTEMBED_CACHE_PATH=/app/.fastembed_cache
 
@@ -48,8 +50,9 @@ EXPOSE 8000
 
 # The entrypoint runs `alembic upgrade head` before exec'ing into this CMD —
 # there is no separate migration step or worker service to run it from, since
-# 750 free instance-hours on Render fits exactly one service.
+# the deployment target is a single Container App instance.
 ENTRYPOINT ["./docker-entrypoint.sh"]
-# Single worker, deliberately. Two workers on 0.1 vCPU would each load their own
-# copy of the ONNX embedding model and exhaust the 512 MB ceiling on their own.
+# Single worker, deliberately. Each worker loads its own copy of the ONNX
+# embedding model, so N workers means N times the memory - raise this only
+# alongside the container's memory allocation, not independently of it.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
