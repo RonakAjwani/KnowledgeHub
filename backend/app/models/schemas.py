@@ -157,8 +157,13 @@ def chunk_id(doc_id: str, chunk_index: int, text: str) -> str:
 class Chunk(BaseModel):
     """Child is the retrieval unit; parent is the generation unit.
 
-    ``char_start``/``char_end`` drive the source-pane highlight; the parent range
-    drives the scroll target. Both are offsets into ``Document.normalized_text``.
+    A ``Citation`` highlights ``parent_char_start``/``parent_char_end``, not
+    ``char_start``/``char_end`` - the parent window is what the LLM actually
+    received and could have answered from, so it is the only span guaranteed to
+    contain whatever the model cited, even when the citable fact falls outside
+    the narrower child span. ``char_start``/``char_end`` remain the retrieval
+    unit's own span (used for embedding/BM25 bookkeeping), not what the UI
+    highlights. Both pairs are offsets into ``Document.normalized_text``.
     """
 
     model_config = ConfigDict(frozen=True)

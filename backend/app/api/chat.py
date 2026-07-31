@@ -426,8 +426,8 @@ async def _serialise_message(
                 # the history load. The chip still shows; it just cannot scroll
                 # anywhere useful, which is the honest outcome for a citation
                 # whose source no longer exists.
-                "char_start": chunk.char_start if chunk else 0,
-                "char_end": chunk.char_end if chunk else 0,
+                "char_start": chunk.parent_char_start if chunk else 0,
+                "char_end": chunk.parent_char_end if chunk else 0,
                 "rank": row.rank,
                 "fused_score": row.fused_score,
                 "rerank_score": row.rerank_score,

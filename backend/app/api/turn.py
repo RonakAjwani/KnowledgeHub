@@ -368,8 +368,8 @@ class TurnRunner:
                     filename=filenames.get(chunk.doc_id, "(unknown)"),
                     section=chunk.section,
                     page=chunk.page,
-                    char_start=chunk.char_start,
-                    char_end=chunk.char_end,
+                    char_start=chunk.parent_char_start,
+                    char_end=chunk.parent_char_end,
                     verified=None,  # I2 - not yet checked, not "unsupported"
                 )
             )
