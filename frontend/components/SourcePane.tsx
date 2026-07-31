@@ -6,6 +6,8 @@ import { useAuth } from "@clerk/nextjs";
 import {
   Download,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   PanelRight,
   TriangleAlert,
   WandSparkles,
@@ -158,11 +160,19 @@ function buildSegments(text: string, highlight: Span | null): Segment[] {
 
 export interface SourcePaneProps {
   documentId: string | null;
-  /** Citation offsets into this document's `normalized_text`. */
-  highlight: { char_start: number; char_end: number } | null;
+  /** Citation offsets into this document's `normalized_text`, plus the page
+   * it was recorded against - `DocumentView`'s PDF fallback when its own
+   * text search misses the passage. */
+  highlight: { char_start: number; char_end: number; page: number | null } | null;
   /** Present when this pane is a slide-over rather than the permanent
    * "nothing open yet" placeholder - renders a close button in the header. */
   onClose?: () => void;
+  /** Whether the caller has given this pane the whole width (its grid column
+   * dropped the chat entirely) rather than the usual fixed-width rail.
+   * Undefined/omitted when the caller has no such mode - the expand button
+   * only renders when `onToggleExpand` is actually given something to call. */
+  expanded?: boolean;
+  onToggleExpand?: () => void;
   className?: string;
 }
 
@@ -170,6 +180,8 @@ export function SourcePane({
   documentId,
   highlight,
   onClose,
+  expanded = false,
+  onToggleExpand,
   className,
 }: SourcePaneProps) {
   const getToken = useSessionToken();
@@ -291,16 +303,31 @@ export function SourcePane({
   }
 
   const kind = fileKind(filename ?? "", documentQuery.data?.mime ?? "");
+  // The extension is redundant right next to its own "· TYPE" badge - an
+  // artifact panel names the thing, then states its format once, not twice.
+  const displayName = filename?.replace(/\.[^./]+$/, "") ?? "Source";
 
   return (
     <Card className={cn("h-full min-h-0", className)}>
-      <CardHeader className="flex-col items-stretch gap-2">
+      {/* One condensed header row - "name · TYPE", actions - the way an
+          artifact panel names itself, rather than the name on its own line
+          with the type demoted to a separate badge below. No leading file
+          icon: paired with the type badge a few words later, it repeated
+          the same fact twice in one row. The Original/Text switch keeps its
+          own row underneath: unlike a plain viewer, this pane has two
+          genuinely different claims on offer (best-effort text-match
+          highlight vs. exact stored offsets - see the tab's own comment),
+          which a same-row icon toggle would flatten into something that
+          reads as a display preference instead of a provenance choice. */}
+      <CardHeader className="flex-col items-stretch gap-0 py-2.5">
         <div className="flex min-w-0 items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-md", kind.swatchClassName)}>
-              <kind.Icon className="size-3.5" aria-hidden />
-            </span>
-            <CardTitle className="truncate">{filename ?? "Source"}</CardTitle>
+            <CardTitle className="truncate">{displayName}</CardTitle>
+            {documentQuery.data && (
+              <span className="shrink-0 text-xs font-medium text-zinc-400 dark:text-zinc-500">
+                · {kind.label}
+              </span>
+            )}
             {documentQuery.isFetching && (
               <LoaderCircle className="size-3.5 shrink-0 animate-spin text-zinc-400" />
             )}
@@ -322,6 +349,21 @@ export function SourcePane({
                 )}
               </Button>
             )}
+            {onToggleExpand && (
+              <Button
+                variant="ghost"
+                size="icon"
+                title={expanded ? "Collapse" : "Expand"}
+                aria-label={expanded ? "Collapse source" : "Expand source"}
+                onClick={onToggleExpand}
+              >
+                {expanded ? (
+                  <Minimize2 className="size-3.5" />
+                ) : (
+                  <Maximize2 className="size-3.5" />
+                )}
+              </Button>
+            )}
             {onClose && (
               <button
                 type="button"
@@ -339,7 +381,7 @@ export function SourcePane({
           <div
             role="tablist"
             aria-label="Source view"
-            className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800"
+            className="mt-2 flex gap-1 border-b border-zinc-200 dark:border-zinc-800"
           >
             {(
               [
@@ -374,30 +416,27 @@ export function SourcePane({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {documentQuery.data && (
-            <>
-              <Badge variant="outline">{kind.label}</Badge>
-              {downloadError && (
-                <span className="text-xs text-red-600 dark:text-red-400">
-                  {downloadError}
-                </span>
-              )}
-            </>
-          )}
-          {highlight && !highlightOutOfRange && (
-            <Badge variant="info">
-              cited {highlight.char_start.toLocaleString("en-US")}-
-              {highlight.char_end.toLocaleString("en-US")}
-            </Badge>
-          )}
-          {hasDerived && (
-            <Badge variant="derived">
-              <WandSparkles className="size-2.5" />
-              contains AI-described figures
-            </Badge>
-          )}
-        </div>
+        {(downloadError || (highlight && !highlightOutOfRange) || hasDerived) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {downloadError && (
+              <span className="text-xs text-red-600 dark:text-red-400">
+                {downloadError}
+              </span>
+            )}
+            {highlight && !highlightOutOfRange && (
+              <Badge variant="info">
+                cited {highlight.char_start.toLocaleString("en-US")}-
+                {highlight.char_end.toLocaleString("en-US")}
+              </Badge>
+            )}
+            {hasDerived && (
+              <Badge variant="derived">
+                <WandSparkles className="size-2.5" />
+                contains AI-described figures
+              </Badge>
+            )}
+          </div>
+        )}
       </CardHeader>
 
       {documentQuery.isPending && (
@@ -466,7 +505,7 @@ export function SourcePane({
               mime={documentQuery.data.mime}
               data={blobQuery.data ?? null}
               text={text}
-              page={null}
+              page={highlight?.page ?? null}
               cited={
                 highlight && !highlightOutOfRange
                   ? text.slice(highlight.char_start, highlight.char_end)

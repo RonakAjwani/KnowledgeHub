@@ -64,15 +64,18 @@ export function SidebarToggleButton({ className }: { className?: string }) {
       </button>
       <div
         className={cn(
-          "pointer-events-none absolute top-full z-50 mt-1.5 hidden items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium shadow-lg group-hover/tooltip:flex",
+          "pointer-events-none absolute top-full z-50 mt-1.5 hidden items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium group-hover/tooltip:flex",
           // Inverted pill: `bg-primary`/`text-primary-fg` resolve per theme in
-          // globals.css, so this needs no `dark:` pair.
-          "bg-primary text-primary-fg",
+          // globals.css, so this needs no `dark:` pair."bg-primary text-primary-fg",
           collapsed ? "left-0" : "right-0",
         )}
       >
         {collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        <kbd className="rounded bg-white/15 px-1 py-0.5 font-sans text-[10px] dark:bg-black/10">
+        {/* Explicit rgba: the tooltip is ink-filled in light and off-white in
+ dark, so the chip has to invert with it — and `dark:bg-black/10`
+ resolves through `--surface-black` to near-white, which made the
+ chip disappear against the light tooltip. */}
+        <kbd className="rounded bg-[rgb(255_255_255/0.16)] px-1 py-0.5 font-sans text-[10px] dark:bg-[rgb(0_0_0/0.12)]">
           {isMac ? "⌘B" : "Ctrl+B"}
         </kbd>
       </div>

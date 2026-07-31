@@ -6,9 +6,8 @@
  * chrome: a back link, the workspace name, a pin toggle, and a rename/delete
  * menu. Reuses the exact mutations/pin-state the sidebar and `/workspaces`
  * grid already use, so an action taken here shows up identically everywhere
- * else - nothing here is a separate, drifting implementation of "rename a
- * workspace."
- */
+ * else - nothing here is a separate, drifting implementation of"rename a
+ * workspace."*/
 
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Files, MoreHorizontal, Pin, Trash2 } from "lucide-react";
@@ -110,7 +109,10 @@ export function WorkspaceHomeHeader({
               : "text-zinc-300 hover:text-zinc-500 dark:text-zinc-700 dark:hover:text-zinc-400",
           )}
         >
-          <Pin className={cn("size-4", isPinned && "fill-current")} aria-hidden />
+          <Pin
+            className={cn("size-4", isPinned && "fill-current")}
+            aria-hidden
+          />
         </button>
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -118,7 +120,9 @@ export function WorkspaceHomeHeader({
             type="button"
             onClick={onToggleDocs}
             aria-pressed={docsOpen}
-            aria-label={docsOpen ? "Hide documents panel" : "Show documents panel"}
+            aria-label={
+              docsOpen ? "Hide documents panel" : "Show documents panel"
+            }
             title={docsOpen ? "Hide documents" : "Show documents"}
             className={cn(
               "rounded p-1",
@@ -142,11 +146,10 @@ export function WorkspaceHomeHeader({
 
             {menuOpen && (
               <div
-                role="menu"
-                // Items are inset from this container's own edges (`p-1.5`
+                role="menu" // Items are inset from this container's own edges (`p-1.5`
                 // here, `rounded-md` per item below) rather than full-bleed -
                 // see AccountMenu for why.
-                className="absolute right-0 top-full z-20 mt-1 w-40 rounded-md border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-800 dark:bg-zinc-950"
+                className="absolute right-0 top-full z-20 mt-1 w-40 rounded-md border border-zinc-200 bg-white p-1.5 dark:border-zinc-800 dark:bg-zinc-950"
               >
                 <button
                   type="button"
@@ -181,7 +184,8 @@ export function WorkspaceHomeHeader({
       {confirmingDelete && workspace && (
         <div className="mt-3 max-w-md rounded-md border border-red-200 bg-red-50 p-2.5 text-xs dark:border-red-900 dark:bg-red-950/30">
           <p className="text-red-800 dark:text-red-200">
-            Delete &ldquo;{workspace.name}&rdquo; and its {workspace.document_count}{" "}
+            Delete &ldquo;{workspace.name}&rdquo; and its{" "}
+            {workspace.document_count}{" "}
             {workspace.document_count === 1 ? "document" : "documents"}? This
             cannot be undone.
           </p>

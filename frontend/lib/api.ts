@@ -200,6 +200,9 @@ export const api = {
       token,
     ),
 
+  deleteConversation: (id: string, token?: string | null) =>
+    request<void>(`/conversations/${id}`, { method: "DELETE" }, token),
+
   /**
    * The disconnect-recovery path. The stream is not resumable by design, so a
    * client that dropped mid-turn refetches final state - including verification

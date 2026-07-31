@@ -8,7 +8,7 @@
  * two surfaces.
  *
  * Layout follows the reference's Projects grid: title + search + sort +
- * "New" in one header row, cards with a pin toggle. Search and sort are both
+ *"New"in one header row, cards with a pin toggle. Search and sort are both
  * real (client-side filter/sort over the already-fetched list, no backend
  * call) - the pin is real too, just device-local (see
  * hooks/usePinnedWorkspaces.ts for why there's no backend column for it).
@@ -79,7 +79,11 @@ function WorkspaceCard({
       tabIndex={0}
       onClick={() => !renaming && !confirmingDelete && onOpen()}
       onKeyDown={(event) => {
-        if ((event.key === "Enter" || event.key === " ") && !renaming && !confirmingDelete) {
+        if (
+          (event.key === "Enter" || event.key === " ") &&
+          !renaming &&
+          !confirmingDelete
+        ) {
           event.preventDefault();
           onOpen();
         }
@@ -130,7 +134,10 @@ function WorkspaceCard({
                   : "text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-zinc-500 dark:text-zinc-700 dark:hover:text-zinc-400",
               )}
             >
-              <Pin className={cn("size-4", pinned && "fill-current")} aria-hidden />
+              <Pin
+                className={cn("size-4", pinned && "fill-current")}
+                aria-hidden
+              />
             </button>
           </div>
         )}
@@ -164,7 +171,8 @@ function WorkspaceCard({
       <div className="mt-4 flex items-center gap-3 text-sm text-zinc-500 dark:text-zinc-400">
         <span className="flex items-center gap-1.5">
           <FileText className="size-3.5" aria-hidden />
-          {workspace.document_count} {workspace.document_count === 1 ? "file" : "files"}
+          {workspace.document_count}{" "}
+          {workspace.document_count === 1 ? "file" : "files"}
         </span>
         <span className="flex items-center gap-1.5">
           <MessageSquare className="size-3.5" aria-hidden />
@@ -241,10 +249,12 @@ export function WorkspaceGrid() {
   const workspaces = useMemo(() => {
     const all = workspacesQuery.data ?? [];
     const q = search.trim().toLowerCase();
-    const filtered = q ? all.filter((w) => w.name.toLowerCase().includes(q)) : all;
+    const filtered = q
+      ? all.filter((w) => w.name.toLowerCase().includes(q))
+      : all;
 
     // Pinned workspaces float to the top regardless of sort key, same as the
-    // reference's separate "Pinned" section - here it's one grid, so the
+    // reference's separate"Pinned"section - here it's one grid, so the
     // grouping has to happen via sort rather than a second list.
     const byPin = (a: Workspace, b: Workspace) =>
       Number(pinned.has(b.id)) - Number(pinned.has(a.id));
@@ -266,7 +276,10 @@ export function WorkspaceGrid() {
         <div className="flex items-center gap-2">
           {showSearch ? (
             <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" aria-hidden />
+              <Search
+                className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500"
+                aria-hidden
+              />
               <input
                 autoFocus
                 value={search}
@@ -296,14 +309,23 @@ export function WorkspaceGrid() {
               onClick={() => setSortMenuOpen((v) => !v)}
               className="flex items-center gap-1 rounded-md border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900"
             >
-              Sort by <span className="font-medium text-zinc-900 dark:text-zinc-100">{SORT_LABEL[sortKey]}</span>
-              <ChevronDown className={cn("size-3.5 transition-transform", sortMenuOpen && "rotate-180")} aria-hidden />
+              Sort by{" "}
+              <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                {SORT_LABEL[sortKey]}
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-3.5 transition-transform",
+                  sortMenuOpen && "rotate-180",
+                )}
+                aria-hidden
+              />
             </button>
             {sortMenuOpen && (
               // Items are inset from this container's own edges (`p-1.5`
               // here, `rounded-md` per item below) rather than full-bleed -
               // see AccountMenu for why.
-              <div className="absolute right-0 top-full z-10 mt-1 w-36 rounded-md border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="absolute right-0 top-full z-10 mt-1 w-36 rounded-md border border-zinc-200 bg-white p-1.5 dark:border-zinc-800 dark:bg-zinc-950">
                 {(Object.keys(SORT_LABEL) as SortKey[]).map((key) => (
                   <button
                     key={key}
@@ -342,12 +364,12 @@ export function WorkspaceGrid() {
       {showLoading && <p className="shimmer-text mt-6 text-sm">Loading...</p>}
 
       {/* A failed fetch is not an empty account. Without this branch the error
-          falls through to the empty state below and the page says "create a
-          workspace to get started" to someone who already has several - the
-          same class of failure I1 exists to prevent on the backend, where a
-          degraded path must never look like a healthy one. The likeliest cause
-          is an expired session, so the copy says so and offers a retry rather
-          than leaving the only route a manual refresh. */}
+ falls through to the empty state below and the page says"create a
+ workspace to get started"to someone who already has several - the
+ same class of failure I1 exists to prevent on the backend, where a
+ degraded path must never look like a healthy one. The likeliest cause
+ is an expired session, so the copy says so and offers a retry rather
+ than leaving the only route a manual refresh. */}
       {!showLoading && workspacesQuery.isError && (
         <div className="mt-6 space-y-2" role="alert">
           <p className="text-sm text-zinc-700 dark:text-zinc-300">
@@ -393,7 +415,9 @@ export function WorkspaceGrid() {
               pinned={pinned.has(workspace.id)}
               onTogglePin={() => togglePin(workspace.id)}
               onOpen={() => router.push(`/workspace/${workspace.id}`)}
-              onRename={(name) => renameMutation.mutate({ id: workspace.id, name })}
+              onRename={(name) =>
+                renameMutation.mutate({ id: workspace.id, name })
+              }
               onDelete={() => deleteMutation.mutate(workspace.id)}
             />
           ))}

@@ -132,6 +132,48 @@ Listed so the gap is visible rather than implied-complete:
 - `prompts.py` / `verify.py` - G3 delimiting is tested for escape correctness;
   G4 claim verification has no measured coverage figure.
 
+## 2026-07-31 - the provider swap, and two bugs in the grader
+
+Re-ran the 22-question set on Anthropic (`claude-sonnet-4-6` generation,
+`claude-haiku-4-5` mechanical). **18/22 against Groq's 13/22, 8.8s median turn
+against 60s.** The decision and the model choice are in
+[[KnowledgeHub Stack Decisions]]; what belongs here is that *four* of the eight
+apparent failures were the grader, not the pipeline.
+
+| Finding | Outcome |
+|---|---|
+| `looks_like_decline` scanned the **whole** answer for a refusal phrase. A stronger model answers a multi-part question and then names what the documents do not cover, so C3, D3 and D5 - every golden fact present, every citation supported - scored as refusals. D3's trigger was "with no mention of figure generation", which is the comparative finding the question *asked for*. | **Fixed.** Split into two tests, because the two expectations want opposite tradeoffs. Should-decline questions keep the permissive whole-answer scan (any hedge is a decline, and that is correct there). Answerable questions use `is_refusal`, which disqualifies only an answer that refuses *as a whole*: no citations anywhere, and a decline phrase in the opening two claims. |
+| Markers are prose; answers are markdown, and emphasis lands **inside** the phrase. E2 declined correctly with "the figure is `**not available**` in the documents provided" and scored as a hallucination, because the bold split `not available in` into `not available** in`. | **Fixed.** Emphasis is stripped before phrase matching. `present()` still matches golden facts against the raw answer, where markdown does not separate the characters of a number or a name. |
+| Diagnosing either cost a full paid rerun, because the stored answer was truncated at 400 characters and both triggers sat past it. | **Fixed.** Answers are stored whole. |
+| Nothing tested the grader. | **Fixed.** `tests/test_eval_grading.py`, 18 cases, fixtures taken from real generation output rather than invented prose - the failure was specifically about how a strong model actually writes. |
+
+Both signals `is_refusal` keys on are properties of *this pipeline* - every
+answering path emits `[n]` markers, and a refusal announces itself before it
+elaborates - not of this corpus, which is what should make them hold on a
+reviewer's documents.
+
+The four surviving failures are **not** generation: A11 (rel 0.262) and F2 (rel
+0.066) are gated below `FLOOR_RERANK`, D6's second document never reached
+context, and B6 laid out the table correctly (105 vs 59) without performing the
+subtraction. Worth noting from the sweep: `FLOOR_RERANK` at 0.25 keeps 16/17
+answerable against 15/17 at the current 0.35, while gating the identical 2/5
+should-declines - A11 is recoverable at no measured cost to refusal precision.
+Left alone deliberately; it is a corpus-tuned constant and the reviewer's corpus
+is not this one.
+
+## 2026-07-31 - the four surviving failures, diagnosed
+
+All four facts are in the corpus. Only one was a pipeline defect.
+
+| Q | Root cause | Status |
+|---|---|---|
+| **B6** | `GENERATE_SYSTEM` said "answer only from the DOCUMENT blocks" and never licensed arithmetic, so a literal model laid out `105` and `59` in a table and left the subtraction to the reader. The golden set already marks the question `derived=True`; computing was always expected. | **Fixed.** A "do the arithmetic" rule: compute the comparison, lead with the result, show the operands and cite them, and never estimate a missing one. Now answers "46 more ... (105 - 59 = 46)". A3 and A6 unchanged as controls. |
+| **D6** | The string `LegalKG` appears in **0 chunks**. It is a nickname `evals/corpus.py` assigns to `2607.24551v1.pdf`; the paper calls itself *French Legal Knowledge Graph* / *SemLegM*. Retrieval puts the passage holding `𝜃 = 0.7` at **rank 1, score 0.79**, and the model then correctly reported that no "LegalKG pipeline" is mentioned. Asked in the document's own words - "what cosine similarity threshold is used for merging entity labels?" - the same chunk comes back **rank 1 at 0.87** and grades `pass`. | **Not a pipeline defect.** The question asks about an entity by a name its corpus does not contain. Left alone; changing it is a golden-set decision. |
+| **A11** | The chunk holding the answer is **rank 1 at rerank 0.381**, *above* `FLOOR_RERANK` 0.35 - but the blend `0.6·max + 0.4·mean` over the reranked top-5 is **0.323**, so the gate abstains on a turn whose best passage cleared the floor. | **Open, and it is a floor question.** Swept over the golden set: 0.30 keeps 16/17 answerable and gates the *identical* 2/5 should-declines as 0.35. Consistent with the standing conclusion that the floor is a backstop and G3 does the real refusing - but it is a corpus-fit constant, so it stays at 0.35 pending a decision. |
+| **F2** | "Summarize what langchain.md is actually about" scores **0.061**. Nothing is broken: the reranker scores *passages* against a query, and no single passage is relevant to a summarize-the-whole-document request. Already anticipated in `schemas.py`. | **Architectural.** A real fix is a document-level summary route, which is a feature rather than a repair. |
+
+**A hypothesis that died on the measurement, recorded because it was wrong.** `grade_node` passes the full 40-candidate pool to `relevance_score`, while `context_budget` decides what the model actually sees - which looked like a gate diluted by passages nobody reads, and worse for multi-part questions. Measured both blends over all 22 questions in one retrieval pass: **identical on 21 of them.** The reranker only scores its top-N and leaves the rest `None`, and `relevance_score` already filters those out, so the pool blend *is* the context blend. Nothing to fix. Cost of checking: one Cohere pass. Cost of shipping it unmeasured: a plausible-sounding change to the abstention gate that does nothing.
+
 ## Standing conclusions
 
 - **A scalar relevance floor cannot detect "right topic, missing fact."**

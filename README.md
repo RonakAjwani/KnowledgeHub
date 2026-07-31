@@ -8,7 +8,7 @@ Built as a CV assessment over five days.
 
 - **Stack:** FastAPI + Next.js, Qdrant, Postgres, LangGraph
 - **Retrieval:** hybrid dense + sparse, fused server-side with weighted RRF, conditional Cohere rerank
-- **Tests:** 375 passing (309 backend, 66 frontend), all in CI
+- **Tests:** 393 passing (327 backend, 66 frontend), all in CI
 - **Run it:** `docker compose up --build`, no accounts needed
 
 ## Contents
@@ -33,9 +33,9 @@ Fastest path. No accounts needed.
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 
-# Add one LLM key to backend/.env. GROQ_API_KEY is the default provider and has
-# the most generous free tier. Everything upstream of generation (upload, parse,
-# chunk, embed, hybrid retrieval) runs with no key at all.
+# Add one LLM key to backend/.env. ANTHROPIC_API_KEY is the default provider.
+# Everything upstream of generation (upload, parse, chunk, embed, hybrid
+# retrieval) runs with no key at all.
 
 docker compose up --build
 ```
@@ -83,7 +83,7 @@ pnpm dev
 | Database | Postgres, SQLAlchemy, Alembic | Citations need real joins across documents, chunks and messages. SQLite works locally then fails on a managed host. |
 | Frontend | Next.js App Router, TypeScript, Tailwind, shadcn/ui | App Router for streaming. shadcn so I own the component code instead of fighting a library's styles. |
 | Auth | Clerk | Generous free tier, quick to wire. More importantly it degrades to a dev mode, so a reviewer needs no account. |
-| LLM | Provider-agnostic adapter (Groq, Anthropic, Gemini) | Free tiers move and quotas run out mid-demo. Swapping provider is an env change, not a code change. |
+| LLM | Provider-agnostic adapter (Anthropic by default; Groq, Gemini) | Free tiers move and quotas run out mid-demo. Swapping provider is an env change, not a code change. |
 
 Docker Compose is the primary deliverable. A free managed Postgres gets deleted 44 days
 after creation, so Compose is what still works after a live link expires.
@@ -240,7 +240,7 @@ All found by measurement, not by reading code.
 | Generation quality dropped mid-testing | Groq meters its strongest model at 100k tokens/day. Invisible in the per-minute headers, only in an error body | Configured fallback model, with the switch surfaced as a degradation event rather than hidden |
 | The fallback then 413'd every time | Smaller context window, but the prompt was still built at the primary's size. A 413 is not retryable | The fallback rebuilds its prompt at its own budget |
 | An ingest and a delete died at random | Qdrant Cloud DNS failed roughly 1 attempt in 12 | Retry once on transport-level errors. 31/32 to 32/32 |
-| Four graders were wrong **before** the pipeline was | One matched "not reported" but not "do not report", scoring a correct refusal as a hallucination. Another compared the last turn against the first turn's expectation | Fixed each. All four moved the number *down*, so a bad result now sends me to check the grader first |
+| Six graders were wrong **before** the pipeline was | One matched "not reported" but not "do not report", scoring a correct refusal as a hallucination. Another compared the last turn against the first turn's expectation. Two more surfaced on the provider swap: a refusal scan that read a *whole* answer, so three fully-cited answers that closed by naming what the documents do not cover scored as refusals — one of them on "no mention of figure generation", the comparative finding the question asked for; and the same scan missing a real refusal because markdown bold split `not available in` into `not available** in` | Fixed each. The first four moved the number *down*, the last two moved it *up* — either way a surprising result now sends me to check the grader first. It now has its own tests |
 | Over-refusal | Tested four relevance signals across all 53 eval questions. Unanswerable questions sit **inside** the answerable range, because they ask for a figure the corpus plausibly could hold | No threshold separates them. The floor became a backstop, and the grounding prompt does the actual refusing |
 | A tuned shortcut cost more than it saved | Rerank was skipped when fusion looked decisive, tuned to maximise Cohere savings. Nothing had checked what the skipped queries *lost* | Measured it: the reranker promotes a different top passage 29% of the time. Skip disabled. Ask what a change costs, not only what it saves |
 

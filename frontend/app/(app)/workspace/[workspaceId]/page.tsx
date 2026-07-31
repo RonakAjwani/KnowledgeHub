@@ -40,6 +40,12 @@ interface Highlight {
   documentId: string;
   char_start: number;
   char_end: number;
+  /** The citation's own recorded page, for `DocumentView`'s PDF fallback -
+   * text-search misses land on this page with nothing highlighted rather
+   * than wherever the viewer happened to be scrolled to. `null` for a
+   * citation with no page (any non-PDF source) or `handleOpenDocument`'s
+   * "just open it" case, where there is no cited passage at all. */
+  page: number | null;
 }
 
 export default function WorkspacePage() {
@@ -58,11 +64,13 @@ export default function WorkspacePage() {
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [highlight, setHighlight] = useState<Highlight | null>(null);
   const [showDocsPanel, setShowDocsPanel] = useState(() => conversationId === null);
+  const [expanded, setExpanded] = useState(false);
   const panelVisible = showDocsPanel || highlight !== null;
 
   const closeDocsPanel = useCallback(() => {
     setShowDocsPanel(false);
     setHighlight(null);
+    setExpanded(false);
   }, []);
 
   // Closes only from this same toggle being clicked again - not on an
@@ -97,11 +105,12 @@ export default function WorkspacePage() {
       documentId: citation.doc_id,
       char_start: citation.char_start,
       char_end: citation.char_end,
+      page: citation.page,
     });
   }, []);
 
   const handleOpenDocument = useCallback((docId: string) => {
-    setHighlight({ documentId: docId, char_start: 0, char_end: 0 });
+    setHighlight({ documentId: docId, char_start: 0, char_end: 0, page: null });
   }, []);
 
   // A brand-new conversation is invisible to Postgres (and so to the
@@ -122,13 +131,35 @@ export default function WorkspacePage() {
     // instead of the real viewport (same fix as app/(app)/layout.tsx's own
     // grid). The documents column only exists in the grid template at all
     // while the panel is open - closed, the chat alone fills the row.
+    //
+    // `minmax(26rem,38%)`, not a flat `24rem`: a fixed pixel column reads as
+    // a narrow sidebar bolted onto the side of the real content, which is
+    // exactly what it was - a reference artifact panel claims a real
+    // proportion of the window, generous enough that its own text doesn't
+    // need to be small to fit. Percentage-based so it actually scales with
+    // window width instead of eating a shrinking fraction of a wide monitor
+    // and a too-large one of a narrow laptop; `26rem` floors it so it never
+    // gets so narrow the reasoning above stops holding.
     <div
       className={cn(
         "grid h-full min-h-0 content-stretch grid-cols-1",
-        panelVisible && "lg:grid-cols-[minmax(0,1fr)_24rem]",
+        panelVisible &&
+          (expanded
+            ? "lg:grid-cols-1"
+            : "lg:grid-cols-[minmax(0,1fr)_minmax(26rem,38%)]"),
       )}
     >
-      <section className="relative flex min-h-0 flex-col border-r border-zinc-200 dark:border-zinc-800">
+      {/* `hidden` rather than unmounted while expanded - a full re-mount on
+          every expand/collapse would drop the chat's scroll position and
+          restart `ChatPane`'s own history fetch for no reason; the grid
+          column it would occupy is simply not there while expanded, so
+          `hidden` costs nothing layout-wise. */}
+      <section
+        className={cn(
+          "relative flex min-h-0 flex-col border-r border-zinc-200 dark:border-zinc-800",
+          expanded && "hidden",
+        )}
+      >
         {/* The richer header (back link, title, pin, rename/delete) only
             makes sense before a specific chat is open - once one is, the
             breadcrumb's job (show which workspace *and which chat*, with a
@@ -173,10 +204,19 @@ export default function WorkspacePage() {
               documentId={highlight.documentId}
               highlight={
                 highlight.char_end > highlight.char_start
-                  ? { char_start: highlight.char_start, char_end: highlight.char_end }
+                  ? {
+                      char_start: highlight.char_start,
+                      char_end: highlight.char_end,
+                      page: highlight.page,
+                    }
                   : null
               }
-              onClose={() => setHighlight(null)}
+              expanded={expanded}
+              onToggleExpand={() => setExpanded((v) => !v)}
+              onClose={() => {
+                setHighlight(null);
+                setExpanded(false);
+              }}
             />
           ) : (
             <DocumentManager

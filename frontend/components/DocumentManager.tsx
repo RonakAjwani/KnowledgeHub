@@ -96,8 +96,8 @@ function extensionOf(filename: string): string {
 
 function formatKinds(kinds: Record<string, number>): string {
   return Object.entries(kinds)
-    .map(([kind, count]) => `${count} ${kind.replace(/_/g, " ")}`)
-    .join(", ");
+    .map(([kind, count]) => `${count} ${kind.replace(/_/g, "")}`)
+    .join(",");
 }
 
 // ------------------------------------------------------------- live state
@@ -117,7 +117,7 @@ export interface DocumentManagerProps {
    * means no workspace is open yet - the panel renders an empty placeholder
    * and every mutation is disabled, since there is nowhere to attach a file. */
   workspaceId: string | null;
-  /** Documents retrieval is restricted to. Empty means "search everything". */
+  /** Documents retrieval is restricted to. Empty means"search everything". */
   selectedDocIds: string[];
   onSelectionChange: (ids: string[]) => void;
   onOpenDocument: (docId: string) => void;
@@ -145,7 +145,8 @@ export function DocumentManager({
 
   const documentsQuery = useQuery({
     queryKey: DOCUMENTS_KEY,
-    queryFn: async () => api.listDocuments(workspaceId, await tokenRef.current()),
+    queryFn: async () =>
+      api.listDocuments(workspaceId, await tokenRef.current()),
     enabled: workspaceId !== null,
   });
 
@@ -192,7 +193,8 @@ export function DocumentManager({
   );
 
   const readyIds = useMemo(
-    () => documents.filter((doc) => doc.status === "ready").map((doc) => doc.id),
+    () =>
+      documents.filter((doc) => doc.status === "ready").map((doc) => doc.id),
     [documents],
   );
 
@@ -204,7 +206,7 @@ export function DocumentManager({
     (docId: string) => {
       const streams = streamsRef.current;
       // Entries are never removed except on unmount, which doubles as the
-      // "already attempted" guard: a stream that died mid-ingest must not be
+      //"already attempted"guard: a stream that died mid-ingest must not be
       // retried on every render.
       if (streams.has(docId)) return;
 
@@ -286,7 +288,9 @@ export function DocumentManager({
         if (ACCEPTED_EXTENSIONS.includes(extensionOf(file.name))) {
           accepted.push(file);
         } else {
-          rejected.push(`${file.name}: only PDF, TXT and Markdown are accepted`);
+          rejected.push(
+            `${file.name}: only PDF, TXT and Markdown are accepted`,
+          );
         }
       }
 
@@ -318,7 +322,9 @@ export function DocumentManager({
             `${file.name}: ${describeError(error)}`,
           ]);
         } finally {
-          setUploadingNames((prev) => prev.filter((name) => name !== file.name));
+          setUploadingNames((prev) =>
+            prev.filter((name) => name !== file.name),
+          );
         }
       }
 
@@ -354,7 +360,7 @@ export function DocumentManager({
   /**
    * The original bytes are stored at upload time (`document.blob_ref = data`,
    * before ingest even starts), so this works regardless of ingest status -
-   * unlike search/citation, "download the file I gave you" has no dependency
+   * unlike search/citation,"download the file I gave you"has no dependency
    * on parsing having finished.
    */
   const downloadDocument = useCallback(async (doc: DocumentSummary) => {
@@ -471,7 +477,9 @@ export function DocumentManager({
 
   if (workspaceId === null) {
     return (
-      <Card className={cn("h-full min-h-0 bg-zinc-50 dark:bg-zinc-950", className)}>
+      <Card
+        className={cn("h-full min-h-0 bg-zinc-50 dark:bg-zinc-950", className)}
+      >
         <CardHeader>
           <CardTitle>Context</CardTitle>
         </CardHeader>
@@ -485,7 +493,9 @@ export function DocumentManager({
   }
 
   return (
-    <Card className={cn("h-full min-h-0 bg-zinc-50 dark:bg-zinc-950", className)}>
+    <Card
+      className={cn("h-full min-h-0 bg-zinc-50 dark:bg-zinc-950", className)}
+    >
       <CardHeader className="py-4">
         <div className="flex min-w-0 items-center gap-2">
           <CardTitle className="text-base">Context</CardTitle>
@@ -534,16 +544,16 @@ export function DocumentManager({
         />
 
         {/*
-          Drag-and-drop and the file picker both work anywhere over this
-          panel (the handlers above sit on the whole scroll container), but
-          the *resting-state* affordance stays a single slim row rather than
-          a permanent dashed box - the reference's own Artifacts panel has no
-          upload chrome at all, since Claude generates those files itself;
-          KnowledgeHub's documents are user-supplied, so some affordance has
-          to exist, but it doesn't need to dominate the panel to be
-          discoverable. The full dropzone still appears, briefly, as the drop
-          target the instant a drag actually enters the panel.
-        */}
+ Drag-and-drop and the file picker both work anywhere over this
+ panel (the handlers above sit on the whole scroll container), but
+ the *resting-state* affordance stays a single slim row rather than
+ a permanent dashed box - the reference's own Artifacts panel has no
+ upload chrome at all, since Claude generates those files itself;
+ KnowledgeHub's documents are user-supplied, so some affordance has
+ to exist, but it doesn't need to dominate the panel to be
+ discoverable. The full dropzone still appears, briefly, as the drop
+ target the instant a drag actually enters the panel.
+ */}
         {dragging ? (
           <div className="rounded-lg border border-dashed border-accent-500 bg-accent-50 px-4 py-5 text-center dark:border-accent-400 dark:bg-accent-500/10">
             <Upload className="mx-auto size-5 text-accent-600 dark:text-accent-400" />
@@ -560,7 +570,10 @@ export function DocumentManager({
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
           >
-            <Upload className="size-3.5 text-zinc-400 dark:text-zinc-500" aria-hidden />
+            <Upload
+              className="size-3.5 text-zinc-400 dark:text-zinc-500"
+              aria-hidden
+            />
             Add files
             <span className="font-normal text-zinc-400 dark:text-zinc-500">
               PDF, TXT or Markdown
@@ -631,9 +644,9 @@ export function DocumentManager({
         )}
 
         {/* Retrieval scope. Kept above the grid and always visible once there
-            is something to scope - which documents get searched is the
-            single thing this checkbox changes, and that question doesn't
-            exist yet for an empty workspace. */}
+ is something to scope - which documents get searched is the
+ single thing this checkbox changes, and that question doesn't
+ exist yet for an empty workspace. */}
         {!showLoading && documents.length > 0 && (
           <>
             <div
@@ -695,7 +708,9 @@ export function DocumentManager({
                     variant="destructive"
                     size="sm"
                     disabled={bulkDeleteMutation.isPending}
-                    onClick={() => bulkDeleteMutation.mutate([...selectedReady])}
+                    onClick={() =>
+                      bulkDeleteMutation.mutate([...selectedReady])
+                    }
                   >
                     {bulkDeleteMutation.isPending && (
                       <LoaderCircle className="size-3 animate-spin" />
@@ -759,7 +774,8 @@ export function DocumentManager({
                 active={activeDocId === doc.id}
                 confirming={confirmingDelete === doc.id}
                 deleting={
-                  deleteMutation.isPending && deleteMutation.variables === doc.id
+                  deleteMutation.isPending &&
+                  deleteMutation.variables === doc.id
                 }
                 deleteError={
                   confirmingDelete === doc.id && deleteMutation.isError
@@ -807,7 +823,7 @@ interface DocumentRowProps {
  * checkbox (always visible - the user asked to keep this discoverable, not
  * hover-only like the reference's own checkbox) and the escalation-cap/
  * sanitization warnings (trust signals, same non-dismissible principle
- * `DegradationBanner` applies) on the right. Hover-revealed delete "X" sits
+ * `DegradationBanner` applies) on the right. Hover-revealed delete"X"sits
  * at the far right, past the checkbox, so it never overlaps it.
  */
 function DocumentRow({
@@ -829,11 +845,12 @@ function DocumentRow({
   const pending = !ready && !failed;
   const extraction = extractionOf(doc);
   const sanitization = sanitizationOf(doc);
-  const capped = !!extraction && extraction.pages_flagged > extraction.pages_escalated;
+  const capped =
+    !!extraction && extraction.pages_flagged > extraction.pages_escalated;
   const kind = fileKind(doc.filename, doc.mime);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
+    if (event.key !== "Enter" && event.key !== "") return;
     event.preventDefault();
     onOpen();
   };
@@ -846,22 +863,26 @@ function DocumentRow({
       onClick={onOpen}
       onKeyDown={handleKeyDown}
       className={cn(
-        "group relative flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-left shadow-sm transition-colors",
+        "group relative flex cursor-pointer items-center gap-3 rounded-xl border p-3 text-left transition-colors",
         active
           ? "border-zinc-400 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-800"
           : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-transparent dark:bg-zinc-900 dark:hover:bg-zinc-800",
       )}
     >
-      <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-lg", kind.swatchClassName)}>
+      <span
+        className={cn(
+          "flex size-10 shrink-0 items-center justify-center rounded-lg",
+          kind.swatchClassName,
+        )}
+      >
         <kind.Icon className="size-5" aria-hidden />
       </span>
 
       <div className="min-w-0 flex-1">
         {/* dark:text-zinc-100, not -50 - this ramp's `z50` stays deliberately
-            dark in dark mode (a background-role value, not a text one; see
-            globals.css), so `dark:text-zinc-50` here was near-black text on
-            a near-black row. `z100` is the ramp's actual "brightest text"
-            step in dark mode. */}
+ dark in dark mode (a background-role value, not a text one; see
+ globals.css), so `dark:text-zinc-50` here was near-black text on
+ a near-black row. `z100` is the ramp's actual"brightest text"step in dark mode. */}
         <p className="truncate text-sm font-semibold leading-snug text-zinc-900 dark:text-zinc-100">
           {doc.filename}
         </p>
@@ -897,7 +918,10 @@ function DocumentRow({
 
         {ready && (
           <p className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-            <CircleCheck className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+            <CircleCheck
+              className="size-3.5 text-emerald-600 dark:text-emerald-400"
+              aria-hidden
+            />
             {kind.label} · {doc.chunk_count} chunks
           </p>
         )}
@@ -919,7 +943,10 @@ function DocumentRow({
             className="shrink-0"
             title={`${sanitization.removed_spans} hidden span${sanitization.removed_spans === 1 ? "" : "s"} stripped at ingest${Object.keys(sanitization.kinds ?? {}).length > 0 ? ` (${formatKinds(sanitization.kinds)})` : ""}. This content is not searchable and cannot be cited.`}
           >
-            <ShieldAlert className="size-4 text-amber-600 dark:text-amber-400" aria-hidden />
+            <ShieldAlert
+              className="size-4 text-amber-600 dark:text-amber-400"
+              aria-hidden
+            />
           </span>
         )}
         {capped && extraction && (
@@ -927,17 +954,20 @@ function DocumentRow({
             className="shrink-0"
             title={`Escalation cap reached: ${extraction.pages_flagged - extraction.pages_escalated} page(s) parsed locally only and may be incomplete.`}
           >
-            <TriangleAlert className="size-4 text-amber-600 dark:text-amber-400" aria-hidden />
+            <TriangleAlert
+              className="size-4 text-amber-600 dark:text-amber-400"
+              aria-hidden
+            />
           </span>
         )}
       </div>
 
       {/* The checkbox controls retrieval scope, the row controls the source
-          pane - so it must not fall through to the row's click handler.
-          Wrapped in its own fixed-size, centered box rather than just relying
-          on the parent row's `items-center`, because a native checkbox's
-          intrinsic box model is inconsistent enough across browsers that it
-          can sit a couple of pixels off its neighbours' baseline otherwise. */}
+ pane - so it must not fall through to the row's click handler.
+ Wrapped in its own fixed-size, centered box rather than just relying
+ on the parent row's `items-center`, because a native checkbox's
+ intrinsic box model is inconsistent enough across browsers that it
+ can sit a couple of pixels off its neighbours'baseline otherwise. */}
       <span
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
@@ -961,8 +991,8 @@ function DocumentRow({
       </span>
 
       {/* Quick delete, hover-revealed. A confirm step still guards it despite
-          the low-friction "X": deleting a document takes its chunks,
-          citation records, and any past answer's sources with it. */}
+ the low-friction"X": deleting a document takes its chunks,
+ citation records, and any past answer's sources with it. */}
       <button
         type="button"
         aria-label={`Delete ${doc.filename}`}
@@ -985,7 +1015,8 @@ function DocumentRow({
             Delete this document?
           </p>
           <p className="mt-1 text-xs leading-5 text-red-700 dark:text-red-400">
-            Its chunks and citation records go with it. This can&rsquo;t be undone.
+            Its chunks and citation records go with it. This can&rsquo;t be
+            undone.
           </p>
           {deleteError && (
             <p className="mt-1.5 text-xs font-medium text-red-800 dark:text-red-200">
@@ -1020,7 +1051,13 @@ function DocumentRow({
 }
 
 /** queued -> parsing -> chunking -> embedding, drawn as four filling segments. */
-function StageTrail({ status, className }: { status: DocumentStatus; className?: string }) {
+function StageTrail({
+  status,
+  className,
+}: {
+  status: DocumentStatus;
+  className?: string;
+}) {
   const current = PIPELINE_STEPS.indexOf(status);
   return (
     <div className={cn("flex items-center gap-1", className)} aria-hidden>

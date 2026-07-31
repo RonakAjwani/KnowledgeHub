@@ -6,16 +6,16 @@
  * Three rendering decisions carry meaning rather than style:
  *
  * - **Inline `[n]` markers become chips in place.** The model emits citations
- *   inside the prose, so the text is split around each marker and the chip is
- *   rendered where the claim is, not collected into a footnote list. Adjacent
- *   markers (`[1][2]`) fall out of the same pass.
+ * inside the prose, so the text is split around each marker and the chip is
+ * rendered where the claim is, not collected into a footnote list. Adjacent
+ * markers (`[1][2]`) fall out of the same pass.
  * - **Abstain is not an error.** The pipeline refusing to answer from weak
- *   retrieval is the system working - it is presented calmly, and it names what
- *   was actually searched so the user can judge whether to rephrase or upload
- *   something. Styling it red would teach people to read honesty as breakage.
+ * retrieval is the system working - it is presented calmly, and it names what
+ * was actually searched so the user can judge whether to rephrase or upload
+ * something. Styling it red would teach people to read honesty as breakage.
  * - **Degradations survive the turn.** The banner is attached to the committed
- *   message, not just to the live stream, so scrolling back still shows that
- *   this particular answer took a fallback (I1).
+ * message, not just to the live stream, so scrolling back still shows that
+ * this particular answer took a fallback (I1).
  */
 
 import { useQuery } from "@tanstack/react-query";
@@ -38,10 +38,15 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { CitationChip } from "@/components/CitationChip";
 import { DegradationBanner } from "@/components/DegradationBanner";
-import { PipelineIndicator, PipelineShimmer } from "@/components/PipelineIndicator";
+import {
+  PipelineIndicator,
+  PipelineShimmer,
+} from "@/components/PipelineIndicator";
 import { Button } from "@/components/ui/button";
 import {
   useChatStream,
@@ -52,6 +57,12 @@ import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useSessionToken } from "@/hooks/useSessionToken";
 import { api } from "@/lib/api";
 import { fileKind } from "@/lib/fileKind";
+import {
+  CITATION_NODE_TAG,
+  CURSOR_NODE_TAG,
+  CURSOR_SENTINEL,
+  remarkCitationMarkers,
+} from "@/lib/markdown-citations";
 import { conversationsKey } from "@/lib/queryKeys";
 import type { Citation, Degradation, PersistedMessage } from "@/lib/types";
 import { cn, conversationLabel } from "@/lib/utils";
@@ -80,7 +91,7 @@ export interface ChatPaneProps {
    * documents and shows up filed under it. `null` = no workspace context. */
   workspaceId: string | null;
   /**
-   * Which thread this pane shows. `null` means "a fresh, unsaved chat" - the
+   * Which thread this pane shows. `null` means"a fresh, unsaved chat"- the
    * moment the first turn lands, the server mints an id and `onConversationStarted`
    * reports it so the sidebar can list it. A non-null value loads that
    * conversation's history before anything else renders.
@@ -136,19 +147,16 @@ function messageToTurn(message: PersistedMessage): Turn {
 
 // --------------------------------------------------------- answer rendering
 
-type Segment =
-  | { kind: "text"; key: string; text: string }
-  | { kind: "citation"; key: string; marker: number; citation: Citation };
-
-/** `[12]` - bounded to three digits so `[2024]` in prose is not eaten as a marker. */
-const MARKER_RE = /\[(\d{1,3})\]/g;
-/** A marker the stream has only half-delivered: `[`, `[1`, `[12`. */
+/** A marker the stream has only half-delivered: `[`, `[1`, `[12`. Stripped
+ * before the text ever reaches `remarkCitationMarkers` (see `MARKER_RE`
+ * there, kept in sync with this one), so a token boundary never renders as a
+ * bare bracket for one frame. */
 const PARTIAL_MARKER_RE = /\[\d{0,3}$/;
 
 /** Composer grows with the draft up to this many pixels, then scrolls internally.
- *  180px, not 160, so it agrees with the textarea's own `max-h-40` fallback -
- *  Tailwind's spacing scale is rem-based and the root is 18px, so `40` is
- *  10rem = 180px here, not the 160 the number would suggest at a 16px root. */
+ * 180px, not 160, so it agrees with the textarea's own `max-h-40` fallback -
+ * Tailwind's spacing scale is rem-based and the root is 18px, so `40` is
+ * 10rem = 180px here, not the 160 the number would suggest at a 16px root. */
 const COMPOSER_MAX_HEIGHT = 180;
 
 /**
@@ -165,40 +173,43 @@ const COMPOSER_MAX_HEIGHT = 180;
  */
 const READING_COLUMN = "mx-auto w-full max-w-2xl";
 
-function segmentAnswer(text: string, citations: Citation[]): Segment[] {
-  const byMarker = new Map(citations.map((c) => [c.marker, c]));
-  const segments: Segment[] = [];
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-
-  MARKER_RE.lastIndex = 0;
-  while ((match = MARKER_RE.exec(text)) !== null) {
-    const marker = Number(match[1]);
-    const citation = byMarker.get(marker);
-    // A marker with no matching citation stays literal text. Rendering a chip
-    // that points nowhere would invent provenance the answer does not have.
-    if (!citation) continue;
-
-    if (match.index > cursor) {
-      segments.push({
-        kind: "text",
-        key: `t${cursor}`,
-        text: text.slice(cursor, match.index),
-      });
-    }
-    segments.push({
-      kind: "citation",
-      key: `c${match.index}-${marker}`,
-      marker,
-      citation,
-    });
-    cursor = match.index + match[0].length;
-  }
-
-  if (cursor < text.length) {
-    segments.push({ kind: "text", key: `t${cursor}`, text: text.slice(cursor) });
-  }
-  return segments;
+/**
+ * `ReactMarkdown`'s `components` map keyed on the two custom tags
+ * `remarkCitationMarkers` emits. Built once per render of `AnswerBody`
+ * (cheap - two closures) rather than hoisted, since both close over that
+ * render's `citations` and `onCitationClick`.
+ *
+ * Cast to `Components`, not naturally assignable to it: that type is keyed on
+ * `keyof JSX.IntrinsicElements`, which real HTML tags exhaust and a
+ * hand-invented one like `citation-marker` never appears in. The cast is
+ * exactly the gap between "a valid hast tag name" (unbounded - this is the
+ * documented way to render a custom node type) and "a tag TypeScript has
+ * static knowledge of."
+ */
+function useAnswerMarkdownComponents(
+  citations: Citation[],
+  onCitationClick: (citation: Citation) => void,
+): Components {
+  return useMemo(
+    () =>
+      ({
+        [CITATION_NODE_TAG]: ({ marker }: { marker: number }) => {
+          const citation = citations.find((c) => c.marker === marker);
+          // A marker with no matching citation stays literal text. Rendering
+          // a chip that points nowhere would invent provenance the answer
+          // does not have.
+          return citation ? (
+            <CitationChip citation={citation} onClick={onCitationClick} />
+          ) : (
+            `[${marker}]`
+          );
+        },
+        [CURSOR_NODE_TAG]: () => (
+          <span className="ml-0.5 inline-block h-[1.1em] w-[2px] animate-pulse bg-zinc-500 align-text-bottom dark:bg-zinc-300" />
+        ),
+      }) as unknown as Components,
+    [citations, onCitationClick],
+  );
 }
 
 function AnswerBody({
@@ -212,35 +223,29 @@ function AnswerBody({
   streaming: boolean;
   onCitationClick: (citation: Citation) => void;
 }) {
-  // While tokens are still arriving, hide a marker that has only partly landed.
-  // Otherwise the reader watches `[`, then `[1`, then a chip pop into place on
-  // every single citation in the answer.
-  const display = streaming ? text.replace(PARTIAL_MARKER_RE, "") : text;
+  // While tokens are still arriving, hide a marker that has only partly
+  // landed - otherwise the reader watches `[`, then `[1`, then a chip pop
+  // into place on every single citation - then splice in the sentinel that
+  // becomes the inline blinking caret (see `CURSOR_SENTINEL`'s own comment
+  // for why that has to happen here, in the markdown source, rather than as
+  // a sibling appended after the rendered output).
+  const display = streaming
+    ? text.replace(PARTIAL_MARKER_RE, "") + CURSOR_SENTINEL
+    : text;
 
-  const segments = useMemo(
-    () => segmentAnswer(display, citations),
-    [display, citations],
-  );
+  const components = useAnswerMarkdownComponents(citations, onCitationClick);
 
   return (
     // Answer prose is the one thing on this screen people read for minutes at
     // a time, so it gets the largest step and a looser line height than the
     // surrounding chrome - `text-sm` was sized like a label, not like body text.
-    <div className="whitespace-pre-wrap break-words text-base leading-[1.7] text-zinc-800 dark:text-zinc-100">
-      {segments.map((segment) =>
-        segment.kind === "text" ? (
-          <span key={segment.key}>{segment.text}</span>
-        ) : (
-          <CitationChip
-            key={segment.key}
-            citation={segment.citation}
-            onClick={onCitationClick}
-          />
-        ),
-      )}
-      {streaming ? (
-        <span className="ml-0.5 inline-block h-[1.1em] w-[2px] animate-pulse bg-zinc-500 align-text-bottom dark:bg-zinc-300" />
-      ) : null}
+    <div className="prose-kh break-words text-base text-zinc-800 dark:text-zinc-100">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkCitationMarkers]}
+        components={components}
+      >
+        {display}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -248,7 +253,7 @@ function AnswerBody({
 /**
  * The documents an answer actually drew from, deduplicated to one entry per
  * document - distinct from the inline `[n]` chips, which mark *where in the
- * prose* a claim came from. This is the "what did you search" summary shown
+ * prose* a claim came from. This is the"what did you search"summary shown
  * once at the end, the reference's artifact card translated to this product's
  * own unit: not a generated file, a cited source. Clicking a card reuses the
  * same `onCitationClick` path as an inline chip, so it opens the exact cited
@@ -296,7 +301,7 @@ function SourcesFooter({
               // background, not as raised tiles (the raised, lighter #2c2c2c
               // treatment belongs to the artifacts-panel rows). Hover lifts
               // one step to z900 so the card is still clearly interactive.
-              className="flex w-full max-w-sm items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 text-left shadow-sm hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900"
+              className="flex w-full max-w-sm items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 text-left hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900"
             >
               <span
                 className={cn(
@@ -308,7 +313,7 @@ function SourcesFooter({
               </span>
               <span className="min-w-0 flex-1">
                 {/* dark:text-zinc-100, not -50 - see DocumentManager's
-                    DocumentRow for why: `z50` stays dark in dark mode. */}
+ DocumentRow for why: `z50` stays dark in dark mode. */}
                 <span className="block truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                   {citation.filename}
                 </span>
@@ -327,6 +332,53 @@ function SourcesFooter({
 
 // ------------------------------------------------------- terminal-state cards
 
+/**
+ * Shown when the last turn in the pane is a user message with nothing after
+ * it - no live view running, no committed assistant turn either.
+ *
+ * That state is reachable without any one component doing anything wrong:
+ * `send()` returns `cancelled` with an empty answer whenever a turn gets
+ * superseded before its first token, and `runTurn` correctly appends nothing
+ * for that case (inventing an empty assistant bubble would be worse). The gap
+ * is what happens *later* - the question was already persisted, but a
+ * conversation reopened after that is a dangling user bubble with no
+ * indication anything went wrong, forever, unless the reader happens to
+ * remember they never got a reply. This card is the difference between "the
+ * app silently dropped that" and "the app told me and let me retry" - the
+ * same I1 (degradation is never silent) reasoning `DegradationBanner` exists
+ * for, just for a turn that did not produce a turn at all.
+ */
+function UnansweredCard({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="rounded-lg border border-zinc-300 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900/60">
+      <div className="flex items-start gap-2">
+        <CircleAlert
+          className="mt-px size-4 shrink-0 text-zinc-500 dark:text-zinc-400"
+          aria-hidden
+        />
+        <div className="min-w-0 flex-1 text-sm">
+          <p className="font-medium text-zinc-800 dark:text-zinc-100">
+            This question never got an answer.
+          </p>
+          <p className="mt-1 text-zinc-600 dark:text-zinc-300">
+            The connection likely dropped before a reply came back - closing
+            the tab or navigating away mid-turn are the usual causes.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRetry}
+            className="mt-2"
+          >
+            <RotateCcw className="size-3" aria-hidden />
+            Try again
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AbstainCard({ abstain }: { abstain: AbstainInfo }) {
   const { doc_count, top_score } = abstain.searched;
   return (
@@ -337,7 +389,7 @@ function AbstainCard({ abstain }: { abstain: AbstainInfo }) {
           aria-hidden
         />
         {/* An abstain *is* the answer for this turn, so it is set at answer
-            size like one - only its metadata lines stay small. */}
+ size like one - only its metadata lines stay small. */}
         <div className="min-w-0 flex-1 text-base leading-[1.6]">
           <p className="font-medium text-zinc-800 dark:text-zinc-100">
             Nothing in your documents supports an answer to this.
@@ -345,7 +397,9 @@ function AbstainCard({ abstain }: { abstain: AbstainInfo }) {
           <p className="mt-1 text-zinc-600 dark:text-zinc-300">
             Searched {doc_count} {doc_count === 1 ? "document" : "documents"};
             the closest passage scored{" "}
-            <span className="font-mono tabular-nums">{top_score.toFixed(2)}</span>
+            <span className="font-mono tabular-nums">
+              {top_score.toFixed(2)}
+            </span>
             , below the threshold for answering. Rather than guess from weak
             matches, this turn returns nothing.
           </p>
@@ -431,10 +485,10 @@ function UserBubble({ content }: { content: string }) {
   return (
     <div className="group flex flex-col items-end">
       {/* zinc-100 is only ~2 RGB units off the page's own zinc-50 in light
-          mode (#fbfbf9 vs #fcfcfb, both tuned to sit near-invisibly close to
-          each other as *surface* steps) - a bubble in that colour reads as
-          no bubble at all. zinc-200 (#f0f0ee) is the nearest step with real
-          contrast against the page. */}
+ mode (#fbfbf9 vs #fcfcfb, both tuned to sit near-invisibly close to
+ each other as *surface* steps) - a bubble in that colour reads as
+ no bubble at all. zinc-200 (#f0f0ee) is the nearest step with real
+ contrast against the page. */}
       <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-3xl bg-zinc-200 px-5 py-3 text-base leading-[1.6] text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100">
         {content}
       </div>
@@ -455,7 +509,7 @@ function UserBubble({ content }: { content: string }) {
  * Copy/Retry, hover-revealed. Retry is offered on every committed turn -
  * answered, errored, abstained, or stopped - since resubmitting makes sense
  * in all four, and a failed turn is arguably where it matters most. It is a
- * client-side-only "replace this turn" illusion: the backend has no message-
+ * client-side-only"replace this turn"illusion: the backend has no message-
  * supersession concept, so `POST /chat` always inserts new rows, and
  * reloading this conversation (`GET /conversations/{id}`) will show the full,
  * honest history - original question/answer *and* the retried one, not one
@@ -532,7 +586,10 @@ function AssistantBubble({
         </div>
       ) : null}
 
-      <SourcesFooter citations={turn.citations} onCitationClick={onCitationClick} />
+      <SourcesFooter
+        citations={turn.citations}
+        onCitationClick={onCitationClick}
+      />
 
       <MessageToolbar content={turn.content} onRetry={onRetry} />
     </div>
@@ -542,7 +599,7 @@ function AssistantBubble({
 // -------------------------------------------------------- workspace recents
 
 /**
- * The workspace-home "Recents" list - the chats inside this workspace, shown
+ * The workspace-home"Recents"list - the chats inside this workspace, shown
  * once composer + this list replace the message area entirely (no
  * conversation selected yet). Reuses the exact query key the sidebar's own
  * expanded-row conversation list uses, so opening this costs nothing extra
@@ -577,7 +634,10 @@ function WorkspaceRecents({
             onClick={() => onOpen(conversation.id)}
             className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
           >
-            <MessageSquare className="size-3.5 shrink-0 text-zinc-400 dark:text-zinc-500" aria-hidden />
+            <MessageSquare
+              className="size-3.5 shrink-0 text-zinc-400 dark:text-zinc-500"
+              aria-hidden
+            />
             <span className="min-w-0 flex-1 truncate font-medium text-zinc-800 dark:text-zinc-100">
               {conversationLabel(conversation)}
             </span>
@@ -616,9 +676,8 @@ export function ChatPane({
   // Grows with the draft instead of offering a manual drag handle - height is
   // measured off `scrollHeight` on every keystroke and capped at
   // `COMPOSER_MAX_HEIGHT`, past which the textarea's own `overflow-y-auto`
-  // takes over rather than the box continuing to grow. Collapsed to "0px"
-  // (not "auto") before measuring: once the box has scrolled internally at
-  // max height, resetting to "auto" can still report the pre-shrink
+  // takes over rather than the box continuing to grow. Collapsed to"0px"// (not"auto") before measuring: once the box has scrolled internally at
+  // max height, resetting to"auto"can still report the pre-shrink
   // `scrollHeight` on the next character deleted, so the box never shrinks
   // back down - collapsing all the way first forces a real remeasure. A
   // layout effect, not a plain effect, so the resize lands before the browser
@@ -647,7 +706,8 @@ export function ChatPane({
   // sidebar has nothing to list or highlight until this fires.
   const reportedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!liveConversationId || liveConversationId === reportedRef.current) return;
+    if (!liveConversationId || liveConversationId === reportedRef.current)
+      return;
     reportedRef.current = liveConversationId;
     onConversationStarted?.(liveConversationId);
   }, [liveConversationId, onConversationStarted]);
@@ -655,7 +715,7 @@ export function ChatPane({
   /**
    * Reset the visible turn list the instant `conversationId` changes, during
    * render rather than in an effect - the pattern React's own docs recommend
-   * for "adjust state when a prop changes" ("You Might Not Need an Effect"),
+   * for"adjust state when a prop changes"("You Might Not Need an Effect"),
    * and the only one that satisfies `react-hooks/set-state-in-effect`: that
    * rule exists because a synchronous reset inside an effect runs one paint
    * late, so old turns flash before the empty list does.
@@ -663,17 +723,17 @@ export function ChatPane({
    * Compared against `liveConversationId`, not just the previous prop value:
    * the parent echoes this pane's own freshly-minted id back down (to
    * highlight it in the sidebar), and without this comparison that echo would
-   * look identical to "the user switched conversations" and wipe the very
+   * look identical to"the user switched conversations"and wipe the very
    * turns that streamed the id into existence.
    *
    * That echo comparison only makes sense for a *non-null* id, though - you
-   * cannot "echo" into starting a new chat. `liveConversationId` is `null`
+   * cannot"echo"into starting a new chat. `liveConversationId` is `null`
    * until this pane's own hook actually mints one, which never happens for a
    * conversation that was only ever loaded from history (opened, not typed
-   * into) - so navigating from such a conversation to "New chat" produces
+   * into) - so navigating from such a conversation to"New chat"produces
    * `conversationId === null === liveConversationId` by pure coincidence, not
    * an echo, and without the explicit null check below that coincidence was
-   * read as "nothing changed," leaving the old conversation's turns on
+   * read as"nothing changed,"leaving the old conversation's turns on
    * screen after the sidebar's New chat button had already navigated away.
    */
   const [historyForId, setHistoryForId] = useState(conversationId);
@@ -685,12 +745,38 @@ export function ChatPane({
     }
   }
 
+  // `liveConversationId` read through a ref, not as a reactive dependency
+  // below - it must be current *without* being a trigger. It transitions
+  // null -> newId the instant `turn.start` arrives, which is well before the
+  // parent's echo of that id reaches this component as the `conversationId`
+  // prop (that round-trips through `onConversationStarted` -> `router.replace`
+  // -> a fresh render). If this effect depended on `liveConversationId`
+  // directly, that transition alone re-ran it - with the `conversationId`
+  // prop still at its old value - so the echo guard below saw a real id on
+  // one side and stale `null` on the other, missed the match, and called
+  // `reset()` on a stream that was only a few hundred milliseconds old. That
+  // aborted the fetch the instant every single first turn started (confirmed
+  // via a direct repro: the `POST /chat` request completes fine standalone,
+  // but fails client-side with `net::ERR_ABORTED` when run through the UI),
+  // which is why a chat's first answer never arrived - not a backend issue at
+  // all in the end.
+  const liveConversationIdRef = useRef(liveConversationId);
+  useEffect(() => {
+    liveConversationIdRef.current = liveConversationId;
+  }, [liveConversationId]);
+
   // The genuine side effects of a real switch - aborting whatever the live
   // stream hook was doing, and fetching the newly-selected conversation's
   // history - stay in an effect. Guarded the same way as the render-time
   // reset above, so the self-authored echo does not abort its own stream.
+  // Fires only on an actual `conversationId` (URL) change - see the ref note
+  // above for why `liveConversationId` itself must stay out of this array.
   useEffect(() => {
-    if (conversationId !== null && conversationId === liveConversationId) return;
+    if (
+      conversationId !== null &&
+      conversationId === liveConversationIdRef.current
+    )
+      return;
     reset();
     if (!conversationId) return;
 
@@ -714,7 +800,7 @@ export function ChatPane({
     return () => {
       cancelled = true;
     };
-  }, [conversationId, liveConversationId, getToken, reset]);
+  }, [conversationId, getToken, reset]);
 
   // Follow the stream, but stop following the moment the user scrolls up to
   // re-read something - yanking them back to the bottom mid-sentence is worse
@@ -786,7 +872,11 @@ export function ChatPane({
             };
             break;
           case "abstain":
-            next = { ...base, abstain: result.abstain, degradations: result.degradations };
+            next = {
+              ...base,
+              abstain: result.abstain,
+              degradations: result.degradations,
+            };
             break;
           case "error":
             next = {
@@ -867,11 +957,28 @@ export function ChatPane({
     [isStreaming, precedingUserContent, runTurn],
   );
 
+  // `retry` above replaces an *existing* assistant turn, keyed on its id -
+  // there is none here, since the whole point of `UnansweredCard` is a user
+  // turn with nothing after it. This appends a fresh assistant turn instead,
+  // same as a normal `submit()` minus the (already-persisted) user bubble.
+  const retryUnanswered = useCallback(() => {
+    if (isStreaming || turns.length === 0) return;
+    const last = turns[turns.length - 1];
+    if (last.role !== "user") return;
+    setShowTrace(false);
+    stickToBottom.current = true;
+    void runTurn(last.content);
+  }, [isStreaming, turns, runTurn]);
+
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
       // Enter sends; Shift+Enter is a newline. IME composition must not send -
       // committing a candidate with Enter would otherwise fire the turn.
-      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
         event.preventDefault();
         void submit();
       }
@@ -884,7 +991,11 @@ export function ChatPane({
   // entirely, matching the reference's project-home screen - there is
   // nothing to scroll yet, so the scope banner and scroll container (both
   // about an in-progress or past conversation) don't apply either.
-  const isHome = conversationId === null && turns.length === 0 && !showLiveTurn && !loadingHistory;
+  const isHome =
+    conversationId === null &&
+    turns.length === 0 &&
+    !showLiveTurn &&
+    !loadingHistory;
 
   // One pill-shaped card, not a bordered textarea beside a separate labelled
   // button - the textarea itself carries no border or ring (the card supplies
@@ -895,7 +1006,7 @@ export function ChatPane({
   const composerRow = (
     <div
       className={cn(
-        "flex flex-col gap-1.5 rounded-3xl border border-zinc-200 bg-white p-2.5 pl-4 shadow-sm",
+        "flex flex-col gap-1.5 rounded-3xl border border-zinc-200 bg-white p-2.5 pl-4",
         "focus-within:border-accent-400 dark:border-zinc-700 dark:bg-zinc-900 dark:focus-within:border-accent-500",
       )}
     >
@@ -907,9 +1018,16 @@ export function ChatPane({
         rows={1}
         placeholder="Ask a question about your documents..."
         aria-label="Message"
+        // `shadow-none!`, not just `outline-none`: the global focus ring in
+        // globals.css paints via `box-shadow`, and it's plain unlayered CSS,
+        // so a normal-weight utility can't outrank it - only `!important`
+        // can. Needed here specifically because a `<textarea>` counts as
+        // `:focus-visible` on a plain mouse click, not just keyboard
+        // navigation (unlike `<button>`/`<a>`), so without this the ring
+        // this card deliberately opts out of would still show on click.
         className={cn(
           "max-h-40 min-h-[1.75rem] w-full resize-none overflow-y-auto bg-transparent py-1 text-base",
-          "text-zinc-900 placeholder:text-zinc-400 focus-visible:outline-none",
+          "text-zinc-900 placeholder:text-zinc-400 focus-visible:outline-none focus-visible:shadow-none!",
           "dark:text-zinc-100 dark:placeholder:text-zinc-500",
         )}
       />
@@ -947,7 +1065,10 @@ export function ChatPane({
         <div className={READING_COLUMN}>
           {composerRow}
           {workspaceId && onOpenConversation ? (
-            <WorkspaceRecents workspaceId={workspaceId} onOpen={onOpenConversation} />
+            <WorkspaceRecents
+              workspaceId={workspaceId}
+              onOpen={onOpenConversation}
+            />
           ) : null}
         </div>
       </section>
@@ -956,14 +1077,13 @@ export function ChatPane({
 
   return (
     <section className="flex min-h-0 flex-1 flex-col">
-      {/* No scope ribbon. It used to sit here, stating "Searching N documents"
-          above every conversation on the grounds that an answer drawn from 2 of
-          40 documents is a different claim from one drawn from all of them -
-          but as a permanent full-width band it was chrome on a reading
-          surface, and the same fact is already legible where it is actually
-          set: the documents panel's own selection checkboxes. Per-answer
-          provenance is carried by the citations, which is the stronger signal
-          anyway. */}
+      {/* No scope ribbon. It used to sit here, stating"Searching N documents"above every conversation on the grounds that an answer drawn from 2 of
+ 40 documents is a different claim from one drawn from all of them -
+ but as a permanent full-width band it was chrome on a reading
+ surface, and the same fact is already legible where it is actually
+ set: the documents panel's own selection checkboxes. Per-answer
+ provenance is carried by the citations, which is the stronger signal
+ anyway. */}
       <div className="relative min-h-0 flex-1">
         <div
           ref={scrollRef}
@@ -971,8 +1091,8 @@ export function ChatPane({
           className="h-full overflow-y-auto px-4 py-6"
         >
           {/* The scroller itself stays full-width, so the scrollbar rides the
-              pane's own right edge rather than floating mid-page; only the
-              content inside it is held to the reading column. */}
+ pane's own right edge rather than floating mid-page; only the
+ content inside it is held to the reading column. */}
           <div className={cn(READING_COLUMN, "space-y-6")}>
             {loadingHistory ? (
               <p className="shimmer-text text-sm font-medium">
@@ -993,13 +1113,25 @@ export function ChatPane({
               ),
             )}
 
+            {/* Gated on `!showLiveTurn` and `!loadingHistory` so this only
+                ever applies to a turn that is truly done and unanswered -
+                never to the ordinary moment between the optimistic user
+                bubble landing and the live view taking over, nor to history
+                still loading in. */}
+            {!loadingHistory &&
+            !showLiveTurn &&
+            turns.length > 0 &&
+            turns[turns.length - 1].role === "user" ? (
+              <UnansweredCard onRetry={retryUnanswered} />
+            ) : null}
+
             {showLiveTurn ? (
               <div className="w-full space-y-2">
                 {/* The shimmer fills the gap before any token has arrived - once the
-                    answer starts streaming, the appearing text is itself the signal
-                    that something is happening, so the line steps aside rather than
-                    shimmering alongside live text. An already-expanded trace stays
-                    open, though: a user who asked to see the detail keeps it. */}
+ answer starts streaming, the appearing text is itself the signal
+ that something is happening, so the line steps aside rather than
+ shimmering alongside live text. An already-expanded trace stays
+ open, though: a user who asked to see the detail keeps it. */}
                 {isStreaming && answer.length === 0 ? (
                   <PipelineShimmer
                     stages={stages}
@@ -1026,7 +1158,10 @@ export function ChatPane({
                 ) : null}
 
                 {!isStreaming ? (
-                  <SourcesFooter citations={citations} onCitationClick={onCitationClick} />
+                  <SourcesFooter
+                    citations={citations}
+                    onCitationClick={onCitationClick}
+                  />
                 ) : null}
               </div>
             ) : null}
@@ -1038,7 +1173,7 @@ export function ChatPane({
             type="button"
             onClick={scrollToBottom}
             aria-label="Scroll to latest message"
-            className="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-md hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            className="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
           >
             <ArrowDown className="size-4" aria-hidden />
           </button>
@@ -1046,8 +1181,8 @@ export function ChatPane({
       </div>
 
       {/* No rule and no bar colour of its own: the composer card already reads
-          as a distinct, lifted surface, and a full-width divider under a
-          centred column drew a line the content did not follow. */}
+ as a distinct, lifted surface, and a full-width divider under a
+ centred column drew a line the content did not follow. */}
       <div className="px-4 pb-4 pt-2">
         <div className={READING_COLUMN}>
           {composerRow}

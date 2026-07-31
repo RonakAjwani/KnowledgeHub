@@ -3,7 +3,7 @@
 /**
  * The sidebar's bottom account row. Clicking it opens a small popover
  * (Settings, Log out) rather than the settings dialog directly, matching the
- * reference - "Settings" inside that popover is what opens `SettingsModal`.
+ * reference -"Settings"inside that popover is what opens `SettingsModal`.
  *
  * Dev mode (`CLERK_ENABLED === false`) has no session and no email to show,
  * so the popover drops both the email line and Log out rather than rendering
@@ -29,14 +29,13 @@ export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
 
   return (
     // `menuRef` wraps the toggle button too, not just the dropdown - otherwise
-    // a click on the button counts as "outside" the dropdown, closes it via
+    // a click on the button counts as"outside"the dropdown, closes it via
     // `useClickOutside`, and the button's own click handler reopens it in the
     // same event.
     <div ref={menuRef} className="relative">
       {menuOpen && (
         <div
-          role="menu"
-          // `overflow-hidden`: the menu items below are full-bleed
+          role="menu" // `overflow-hidden`: the menu items below are full-bleed
           // (`w-full`, no margin or rounding of their own) so their
           // hover/focus highlight reaches edge-to-edge - without this, that
           // highlight on the first/last item is a square-cornered rectangle
@@ -51,7 +50,7 @@ export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
           // it fits at every size. Items are inset from the container's
           // rounded edge (`p-1.5` here + `rounded-md` per item) so a
           // full-bleed hover highlight never collides with the curve.
-          className="absolute bottom-full left-0 z-40 mb-1.5 w-full overflow-hidden rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-800 dark:bg-zinc-950"
+          className="absolute bottom-full left-0 z-40 mb-1.5 w-full overflow-hidden rounded-lg border border-zinc-200 bg-white p-1.5 dark:border-zinc-800 dark:bg-zinc-950"
         >
           {CLERK_ENABLED && email && (
             <p className="truncate border-b border-zinc-200 px-2.5 pb-2 pt-0.5 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
@@ -100,7 +99,11 @@ export function AccountMenu({ collapsed = false }: { collapsed?: boolean }) {
       >
         {imageUrl ? (
           // eslint-disable-next-line @next/next/no-img-element -- remote Clerk-hosted avatar
-          <img src={imageUrl} alt="" className="size-6 shrink-0 rounded-full object-cover" />
+          <img
+            src={imageUrl}
+            alt=""
+            className="size-6 shrink-0 rounded-full object-cover"
+          />
         ) : (
           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
             <User className="size-3.5" aria-hidden />

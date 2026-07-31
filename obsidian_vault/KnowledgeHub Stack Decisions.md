@@ -19,18 +19,27 @@ Locked choices for [[KnowledgeHub Assignment Requirements]]. Carried over from [
 
 ## LLM provider strategy
 
-Development on free tiers, Anthropic key added at deployment if wanted.
+**SETTLED 2026-07-31: Anthropic is the default provider.** Development ran on free tiers; the swap happened before deployment, and it was measured, not assumed.
 
-- Existing code already speaks **OpenAI-compatible API** (Cerebras + Groq). Keep that as the primary adapter - Groq, Cerebras and Gemini's compat endpoint all fit behind it.
-- Approximate free-tier limits *(volatile - verify before relying on them)*: Gemini AI Studio ~1,500 RPD / 15 RPM / 1M TPM, no card. Groq ~30 RPM / 6K TPM / 1K RPD, best latency.
-
-Role split:
-
-| Role | Model choice | Why |
+| Run | Golden set | Median turn |
 |---|---|---|
-| Routing + query rewriting | fastest available (Groq, Gemini Flash) | latency-critical, mechanical |
-| Generation | Gemini 2.5 Pro free tier in dev | 1M context, generous RPD |
-| Judge / faithfulness | anything - **runs async or in CI, never in request path** | not latency-critical |
+| Groq `llama-3.3-70b-versatile` | 13/22 | 60.0s |
+| Anthropic `claude-sonnet-4-6` | **18/22** | **8.8s** |
+
+Two reasons, in order. **Answer quality** is the headline. **A daily token cap cannot be paced around** is the one that decided it: Groq meters ~100k tokens/day, six diagnostic runs exhausted it in an afternoon, and once it is gone every turn sits in the pacer - which is where the 60s median comes from. A review window is exactly when that runs out, and no amount of per-minute pacing helps. Anthropic also puts a vision model on the same key as the text models, so Tier-2 page escalation works on the default provider instead of needing `LLM_PROVIDER=gemini`.
+
+Gemini and Groq stay fully wired and are one env var away.
+
+Role split (`MODELS_BY_PROVIDER` in `config.py` is the live table):
+
+| Role | Model | Why |
+|---|---|---|
+| Route, rewrite, verify, generate-fallback | `claude-haiku-4-5` | latency-critical and mechanical; cheapest tier |
+| Generation, VLM escalation | `claude-sonnet-4-6` | the quality-carrying calls, and the only vision model on the key |
+
+**Sonnet 4.6 rather than Sonnet 5, and the reason is thinking.** Omitting the `thinking` parameter - which the adapter does - means *no thinking* on 4.6 but *adaptive thinking* on Sonnet 5, where it is the default rather than an opt-in. Thinking tokens come out of the same `max_tokens` bucket as the answer, so on Sonnet 5 the reasoning budget silently competes with `max_answer_tokens` - the identical failure that took `gpt-oss-120b` out of contention, an answer that runs out of budget mid-thought and returns as silence. Nothing here needs reasoning tokens: retrieval has done the work and generation is grounded extraction from supplied passages.
+
+**`timeout_llm_route_s` moved 2.0 -> 4.0.** 2.0 was sized against Groq's ~0.2s route call. MEASURED on Haiku over five representative queries: median 1.30s, max 2.52s - so the old ceiling timed out the slowest quarter of routes. It fails open to `retrieve`, so nothing broke loudly; it just emitted a `route/timeout` degradation on healthy traffic, which is worse than useless, because I1 degradations are only readable if they mean something.
 
 ## ⚠️ Correction to earlier advice: do not use provider-native citations
 

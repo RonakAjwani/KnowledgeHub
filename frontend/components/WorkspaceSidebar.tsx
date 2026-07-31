@@ -15,7 +15,7 @@
  * `useSearchParams`) and navigates with `useRouter`, rather than taking
  * `activeWorkspaceId`/`onSelect` props from a parent. That's what makes a
  * specific chat a real, shareable, back-button-safe URL - a plain client-state
- * "which workspace is open" variable, the previous design, could not do that.
+ *"which workspace is open"variable, the previous design, could not do that.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -33,7 +33,12 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import {
   useMemo,
   useRef,
@@ -46,6 +51,7 @@ import { AccountMenu } from "@/components/AccountMenu";
 import { SidebarToggleButton } from "@/components/SidebarToggleButton";
 import { Button } from "@/components/ui/button";
 import { useSessionToken } from "@/hooks/useSessionToken";
+import { useConversationMutations } from "@/hooks/useConversationMutations";
 import { useHasMounted } from "@/hooks/useHasMounted";
 import { usePinnedWorkspaces } from "@/hooks/usePinnedWorkspaces";
 import { useWorkspaceMutations } from "@/hooks/useWorkspaceMutations";
@@ -126,7 +132,7 @@ function InlineNameField({
 // ---------------------------------------------------------- new workspace
 
 /**
- * "New workspace" opens this instead of the old rename-style inline field:
+ *"New workspace"opens this instead of the old rename-style inline field:
  * a workspace is nearly always created *to hold something*, so asking for the
  * name and the first documents in one step avoids the create -> reopen ->
  * upload round trip. Uploads run after the workspace exists (the API has
@@ -228,7 +234,11 @@ export function NewWorkspaceDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      // True-black scrim via an explicit rgba, NOT `bg-black/40`:
+      // `--color-black` is indirected to `--surface-black`, which inverts to
+      // near-white in dark mode, so `bg-black/40` painted a WHITE veil over
+      // the dark app instead of dimming it (measured at oklab L=0.94).
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(0_0_0/0.45)] p-4"
       onClick={() => !busy && onClose()}
       onKeyDown={(event) => {
         if (event.key === "Escape" && !busy) onClose();
@@ -239,7 +249,7 @@ export function NewWorkspaceDialog({
         aria-modal="true"
         aria-labelledby="new-workspace-title"
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 shadow-xl sm:p-8 dark:border-zinc-800 dark:bg-zinc-950"
+        className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 sm:p-8 dark:border-zinc-800 dark:bg-zinc-950"
       >
         <div className="flex items-center justify-between">
           <h2
@@ -400,6 +410,100 @@ export function NewWorkspaceDialog({
   );
 }
 
+// ------------------------------------------------------------ conversation row
+
+/**
+ * One chat in the expanded workspace's list. The same hover-reveal-icon,
+ * click-to-arm, inline-confirm shape as `WorkspaceRow`'s own delete flow -
+ * intentionally, since this is meant to read as"chats delete the same way
+ * workspaces do,"not as a second, differently-behaved delete control the
+ * user has to learn separately. Minus rename/pin: a conversation's label is
+ * derived from its first message, not a user-set field, so there is nothing
+ * for a rename control to edit.
+ *
+ * A `role="button"` div, not a `<button>`, for the same reason `WorkspaceRow`
+ * uses one: the delete icon nested inside it is itself interactive, and a
+ * `<button>` cannot contain another `<button>`.
+ */
+function ConversationRow({
+  conversation,
+  active,
+  onNavigate,
+  onDelete,
+}: {
+  conversation: Conversation;
+  active: boolean;
+  onNavigate: () => void;
+  onDelete: () => void;
+}) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  return (
+    <div>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onNavigate}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onNavigate();
+          }
+        }}
+        className={cn(
+          "group flex w-full cursor-pointer items-center gap-1.5 truncate rounded-md px-2 py-1 text-left text-[0.8rem]",
+          active
+            ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
+            : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",
+        )}
+      >
+        <MessageSquare className="size-3 shrink-0 opacity-60" aria-hidden />
+        <span className="min-w-0 flex-1 truncate">
+          {conversationLabel(conversation)}
+        </span>
+        <button
+          type="button"
+          aria-label="Delete chat"
+          onClick={(event) => {
+            event.stopPropagation();
+            setConfirmingDelete(true);
+          }}
+          className="hidden shrink-0 rounded p-0.5 text-zinc-400 hover:bg-red-100 hover:text-red-700 group-hover:block dark:hover:bg-red-950/50 dark:hover:text-red-300"
+        >
+          <Trash2 className="size-3" aria-hidden />
+        </button>
+      </div>
+
+      {confirmingDelete ? (
+        <div className="mt-1 rounded-md border border-red-200 bg-red-50 p-2 text-xs dark:border-red-900 dark:bg-red-950/30">
+          <p className="text-red-800 dark:text-red-200">
+            Delete this chat? This cannot be undone.
+          </p>
+          <div className="mt-1.5 flex gap-1.5">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                setConfirmingDelete(false);
+                onDelete();
+              }}
+            >
+              Delete
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirmingDelete(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // --------------------------------------------------------------- workspace row
 
 function WorkspaceRow({
@@ -430,6 +534,14 @@ function WorkspaceRow({
     queryFn: async () => api.listConversations(workspace.id, await getToken()),
     enabled: active,
   });
+
+  // Navigate off a conversation the moment it's the one just deleted - the
+  // alternative is a URL that still points at `?c=<deleted id>`, which
+  // `WorkspacePage` would then try to load history for and fail.
+  const { deleteMutation: deleteConversationMutation } =
+    useConversationMutations(workspace.id, (deletedId) => {
+      if (deletedId === activeConversationId) onNavigate(workspace.id, null);
+    });
 
   if (renaming) {
     return (
@@ -463,7 +575,7 @@ function WorkspaceRow({
           "group flex w-full cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-sm",
           // Selected state is a neutral tint, not an accent wash - a
           // persistently-visible surface shouldn't carry the one hue that's
-          // supposed to mean "this is the primary action." In dark mode the
+          // supposed to mean"this is the primary action."In dark mode the
           // fill stops at z900 rather than going a further step to z800:
           // z800 (#333) is light enough to squeeze the muted count text
           // below AA, and there is no muted step bright enough to sit on it
@@ -480,12 +592,15 @@ function WorkspaceRow({
           )}
           aria-hidden
         />
-        <span className="min-w-0 flex-1 truncate font-medium">{workspace.name}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {workspace.name}
+        </span>
         {/* One step stronger than the usual muted pair (`400/dark:500`):
-            this count sits on the *selected* row fill as well as the plain
-            sidebar, and the lighter pair measured 3.3:1 there. */}
+ this count sits on the *selected* row fill as well as the plain
+ sidebar, and the lighter pair measured 3.3:1 there. */}
         <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
-          {workspace.document_count} {workspace.document_count === 1 ? "file" : "files"}
+          {workspace.document_count}{" "}
+          {workspace.document_count === 1 ? "file" : "files"}
         </span>
         <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
           <button
@@ -506,7 +621,10 @@ function WorkspaceRow({
                 : "text-zinc-300 hover:text-zinc-700 dark:hover:text-zinc-200",
             )}
           >
-            <Pin className={cn("size-3", pinned && "fill-current")} aria-hidden />
+            <Pin
+              className={cn("size-3", pinned && "fill-current")}
+              aria-hidden
+            />
           </button>
           <button
             type="button"
@@ -536,7 +654,8 @@ function WorkspaceRow({
       {confirmingDelete ? (
         <div className="ml-5 mt-1 rounded-md border border-red-200 bg-red-50 p-2 text-xs dark:border-red-900 dark:bg-red-950/30">
           <p className="text-red-800 dark:text-red-200">
-            Delete &ldquo;{workspace.name}&rdquo; and its {workspace.document_count}{" "}
+            Delete &ldquo;{workspace.name}&rdquo; and its{" "}
+            {workspace.document_count}{" "}
             {workspace.document_count === 1 ? "document" : "documents"}? This
             cannot be undone.
           </p>
@@ -551,7 +670,11 @@ function WorkspaceRow({
             >
               Delete
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirmingDelete(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirmingDelete(false)}
+            >
               Cancel
             </Button>
           </div>
@@ -561,20 +684,13 @@ function WorkspaceRow({
       {active ? (
         <div className="ml-5 mt-0.5 space-y-0.5 border-l border-zinc-200 pl-2 dark:border-zinc-800">
           {(conversationsQuery.data ?? []).map((conversation: Conversation) => (
-            <button
+            <ConversationRow
               key={conversation.id}
-              type="button"
-              onClick={() => onNavigate(workspace.id, conversation.id)}
-              className={cn(
-                "flex w-full items-center gap-1.5 truncate rounded-md px-2 py-1 text-left text-[0.8rem]",
-                conversation.id === activeConversationId
-                  ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",
-              )}
-            >
-              <MessageSquare className="size-3 shrink-0 opacity-60" aria-hidden />
-              <span className="truncate">{conversationLabel(conversation)}</span>
-            </button>
+              conversation={conversation}
+              active={conversation.id === activeConversationId}
+              onNavigate={() => onNavigate(workspace.id, conversation.id)}
+              onDelete={() => deleteConversationMutation.mutate(conversation.id)}
+            />
           ))}
 
           <button
@@ -633,7 +749,7 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
   // Forces the server-matching first client paint through the loading
   // branch even if the query has already resolved by then (a fast localhost
   // fetch can beat hydration) - see hooks/useHasMounted.ts for why this is
-  // the fix for the "isLoading differs between SSR and hydration" mismatch,
+  // the fix for the"isLoading differs between SSR and hydration"mismatch,
   // not a cosmetic workaround.
   const hasMounted = useHasMounted();
   const showLoading = !hasMounted || workspacesQuery.isLoading;
@@ -658,12 +774,14 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
     [filteredWorkspaces, pinned],
   );
 
-  const { renameMutation, deleteMutation } = useWorkspaceMutations((deletedId) => {
-    if (deletedId !== activeWorkspaceId) return;
-    const remaining = workspaces.filter((w) => w.id !== deletedId);
-    if (remaining[0]) navigate(remaining[0].id, null);
-    else router.push("/workspaces");
-  });
+  const { renameMutation, deleteMutation } = useWorkspaceMutations(
+    (deletedId) => {
+      if (deletedId !== activeWorkspaceId) return;
+      const remaining = workspaces.filter((w) => w.id !== deletedId);
+      if (remaining[0]) navigate(remaining[0].id, null);
+      else router.push("/workspaces");
+    },
+  );
 
   // No icon-rail collapsed state: collapsing hides the sidebar entirely
   // (matching the reference), and `(app)/layout.tsx` is what decides whether
@@ -704,7 +822,10 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
           onClick={() => setShowCreateDialog(true)}
           className="mt-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
         >
-          <Plus className="size-3.5 text-zinc-400 dark:text-zinc-500" aria-hidden />
+          <Plus
+            className="size-3.5 text-zinc-400 dark:text-zinc-500"
+            aria-hidden
+          />
           New workspace
         </button>
 
@@ -718,7 +839,10 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
               : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900",
           )}
         >
-          <LayoutGrid className="size-3.5 text-zinc-400 dark:text-zinc-500" aria-hidden />
+          <LayoutGrid
+            className="size-3.5 text-zinc-400 dark:text-zinc-500"
+            aria-hidden
+          />
           Workspaces
         </button>
       </div>
@@ -734,12 +858,12 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
       )}
 
       {/* `pt-1.5` is not cosmetic: `overflow-y-auto` clips at this element's
-          padding box, and the focus ring (globals.css) is drawn 4px *outside*
-          a row's border box. With no top padding the first row sat flush
-          against that boundary and the top of its ring was sliced off. 6px of
-          padding gives the ring its 4px of clearance. Any scroll container
-          holding focusable children needs >= 4px of padding on every side for
-          the same reason. */}
+ padding box, and the focus ring (globals.css) is drawn 4px *outside*
+ a row's border box. With no top padding the first row sat flush
+ against that boundary and the top of its ring was sliced off. 6px of
+ padding gives the ring its 4px of clearance. Any scroll container
+ holding focusable children needs >= 4px of padding on every side for
+ the same reason. */}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1.5">
         {showLoading ? (
           <p className="shimmer-text px-2 py-1 text-sm">Loading...</p>
@@ -771,13 +895,17 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
                   workspace={workspace}
                   active={workspace.id === activeWorkspaceId}
                   activeConversationId={
-                    workspace.id === activeWorkspaceId ? activeConversationId : null
+                    workspace.id === activeWorkspaceId
+                      ? activeConversationId
+                      : null
                   }
                   pinned={true}
                   onTogglePin={() => togglePin(workspace.id)}
                   onNavigate={navigate}
                   onDelete={(w) => deleteMutation.mutate(w.id)}
-                  onRename={(w, name) => renameMutation.mutate({ id: w.id, name })}
+                  onRename={(w, name) =>
+                    renameMutation.mutate({ id: w.id, name })
+                  }
                 />
               ))}
             </div>
@@ -798,13 +926,17 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
                   workspace={workspace}
                   active={workspace.id === activeWorkspaceId}
                   activeConversationId={
-                    workspace.id === activeWorkspaceId ? activeConversationId : null
+                    workspace.id === activeWorkspaceId
+                      ? activeConversationId
+                      : null
                   }
                   pinned={false}
                   onTogglePin={() => togglePin(workspace.id)}
                   onNavigate={navigate}
                   onDelete={(w) => deleteMutation.mutate(w.id)}
-                  onRename={(w, name) => renameMutation.mutate({ id: w.id, name })}
+                  onRename={(w, name) =>
+                    renameMutation.mutate({ id: w.id, name })
+                  }
                 />
               ))}
             </div>

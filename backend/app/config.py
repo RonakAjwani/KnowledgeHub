@@ -68,13 +68,27 @@ MODELS_BY_PROVIDER: dict[str, dict[str, str | None]] = {
         "verify": "llama-3.1-8b-instant",
         "vlm": None,
     },
+    # Haiku for the mechanical roles, Sonnet for generation and vision - the
+    # split the cost story asks for, and the only provider here with a vision
+    # model on the same key as the text models.
+    #
+    # Sonnet **4.6**, not Sonnet 5, and the reason is thinking. Omitting the
+    # `thinking` parameter - which the adapter does - means *no thinking* on
+    # 4.6, but *adaptive thinking* on Sonnet 5, where it is the default rather
+    # than an opt-in. Thinking tokens are drawn from the same `max_tokens`
+    # bucket as the answer, so on Sonnet 5 the reasoning budget silently
+    # competes with `max_answer_tokens` - the identical failure that took
+    # gpt-oss-120b out of contention above, an answer that runs out of budget
+    # mid-thought and returns as silence. Nothing in this pipeline needs
+    # reasoning tokens: retrieval has already done the work and generation is
+    # grounded extraction from supplied passages.
     "anthropic": {
         "route": "claude-haiku-4-5-20251001",
         "rewrite": "claude-haiku-4-5-20251001",
-        "generate": "claude-sonnet-5",
+        "generate": "claude-sonnet-4-6",
         "generate_fallback": "claude-haiku-4-5-20251001",
         "verify": "claude-haiku-4-5-20251001",
-        "vlm": "claude-sonnet-5",
+        "vlm": "claude-sonnet-4-6",
     },
 }
 
@@ -117,12 +131,17 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------- LLM
     # Swapping providers is a config change, never a code change.
     #
-    # Groq by default: Gemini's free tier is 20 requests/day on the generate
-    # model, which is below what one demo conversation costs, and Groq's limits
-    # are far higher and its responses faster. Gemini stays fully wired and is
-    # the only configured provider with a vision model, so Tier-2 page
-    # escalation needs LLM_PROVIDER=gemini.
-    llm_provider: Literal["gemini", "anthropic", "groq"] = "groq"
+    # Anthropic by default, on answer quality, MEASURED on the 22-question
+    # golden set 2026-07-31: 18/22 against Groq's 13/22, at an 8.8s median turn
+    # against 60s. The latency gap is mostly Groq's daily token cap - once it is
+    # hit every turn sits in the pacer - which is the second reason: a free tier
+    # metered per *day* cannot be paced around, and a review window is exactly
+    # when it runs out. Anthropic also has a vision model on the same key as the
+    # text models, so Tier-2 page escalation works on the default provider
+    # rather than needing LLM_PROVIDER=gemini.
+    #
+    # Gemini and Groq stay fully wired and are one env var away.
+    llm_provider: Literal["gemini", "anthropic", "groq"] = "anthropic"
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
     groq_api_key: str = ""
@@ -177,7 +196,14 @@ class Settings(BaseSettings):
     # constants - they encode which stages may degrade and which may not.
     timeout_qdrant_s: float = 3.0  # -> 503, retrieval cannot degrade
     timeout_cohere_s: float = 2.0  # -> fused order, fail open
-    timeout_llm_route_s: float = 2.0  # -> assume `retrieve`, fail open
+    # 2.0 was sized against Groq, which answers the route prompt in ~0.2s.
+    # MEASURED on claude-haiku-4-5 2026-07-31 over five representative queries:
+    # median 1.30s, max 2.52s - so a 2.0s ceiling times out the slowest quarter
+    # of routes. It fails open to `retrieve`, so nothing breaks loudly; it just
+    # emits a `route/timeout` degradation on healthy traffic, which is worse
+    # than useless (I1 degradations are only readable if they mean something).
+    # 4.0 clears the measured max with headroom and still bounds the stage.
+    timeout_llm_route_s: float = 4.0  # -> assume `retrieve`, fail open
     timeout_llm_rewrite_s: float = 3.0  # -> raw query, fail open
     timeout_llm_generate_s: float = 30.0  # -> 503, cannot degrade
     timeout_llm_verify_s: float = 10.0  # -> verified: null, fail *unknown*
@@ -268,6 +294,25 @@ class Settings(BaseSettings):
     # at all, and the `degradation` event already tells the user which model
     # replied (I1) - it now also means the context was trimmed.
     max_context_tokens_fallback: int = 2000
+
+    # Overview questions ("summarise this document", "what are these about") are
+    # answered on breadth, and the normal budget starves them: MEASURED, at 4000
+    # only 4 of the 12 available chunks reached the prompt and the summary
+    # covered one section of a many-section file. At 8000 it is 9 chunks across
+    # 3 documents, which is most of the available gain - 16000 adds 3 more chunks
+    # and no new document. Raising `max_context_chunks` alone does nothing: the
+    # token budget binds first, so the two only work together.
+    #
+    # Scoped to this one route rather than raised globally. Ordinary lookups do
+    # not need it, and every retrieval question would pay for it.
+    max_context_tokens_overview: int = 8000
+
+    # Chunks pulled from *each* document on the overview path. Three is enough to
+    # characterise a document without crowding out the others: at 12 documents it
+    # is already at `max_context_chunks`, and beyond that the per-document spread
+    # is trimmed by rank anyway. The cost of this route is one Qdrant call per
+    # document, fanned out concurrently.
+    overview_chunks_per_doc: int = 3
 
     # Skip the reranker when fusion is already decisive - DISABLED by default,
     # because the premise turned out to be measurably false.

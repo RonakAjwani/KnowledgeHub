@@ -386,6 +386,17 @@ body {
  * `:focus-visible`, never `:focus` - it appears for keyboard navigation and
  * never on a mouse click, which is what lets a near-monochrome interface carry
  * a blue affordance while having no hue at all at rest.
+ *
+ * That "never on a mouse click" half only holds for `button`/`a`/`summary`/
+ * `[role="button"]`-style controls. Browsers treat a text-editable element
+ * (`input`, `textarea`) as `:focus-visible` on *any* focus, mouse click
+ * included - the heuristic assumes a field about to receive typed input
+ * should always show it's focused, regardless of how it got focus. A control
+ * that wants to show something other than this ring on click (the chat
+ * composer's `focus-within:border-accent-400` card in `ChatPane.tsx` is the
+ * one case so far) has to opt out with `focus-visible:shadow-none!` - plain
+ * `outline-none` isn't enough, since this rule paints with `box-shadow` and
+ * is unlayered, so only an `!important` utility can outrank it.
  */
 button:focus-visible,
 a:focus-visible,
@@ -463,4 +474,192 @@ summary:focus-visible,
     color: var(--color-zinc-500);
     background-image: none;
   }
+}
+
+/*
+ * Markdown typography - rendered Markdown's actual type scale, used by both
+ * the source pane's Original view and a streamed chat answer.
+ *
+ * Referenced by `DocumentView.tsx` since that component was written, but
+ * never defined until now: a document's headings, lists and bold spans were
+ * rendering with nothing but the browser's UA stylesheet (default `<h2>`
+ * sizing, no list indent tuned to this type scale, no code/table treatment) -
+ * present but never actually restyled to belong to this app.
+ *
+ * Every colour below is paired explicitly under `:root.dark .prose-kh`,
+ * mirroring the same light/dark step pairs the rest of the codebase already
+ * uses as paired Tailwind utilities (`text-zinc-900 dark:text-zinc-100`,
+ * `text-zinc-500 dark:text-zinc-400`, `border-zinc-200 dark:border-zinc-800`
+ * - grepped from existing components rather than guessed). A first version
+ * of this file tried the shortcut of referencing `var(--z800)` etc. directly
+ * and letting `:root.dark`'s own redefinition of that *same numbered step*
+ * carry the swap, on the theory that high step = high contrast in both
+ * ramps. It does not: the two ramps are independently authored per the
+ * comment above this one ("Two ramps, fully indirected... can genuinely
+ * differ at every step"), and light mode's `z800` (body ink) lands on dark
+ * mode's `z800` (`#262626`, a near-black *surface* fill) - which rendered
+ * this answer's own prose nearly invisible against the dark theme's near
+ * black page. Every rule here is one `:root.dark` override away for exactly
+ * that reason, not because a var()-only approach almost worked and one
+ * property was missed.
+ */
+.prose-kh {
+  color: var(--z800);
+}
+
+.prose-kh > :first-child {
+  margin-top: 0;
+}
+.prose-kh > :last-child {
+  margin-bottom: 0;
+}
+
+.prose-kh h1,
+.prose-kh h2,
+.prose-kh h3,
+.prose-kh h4 {
+  color: var(--z900);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.prose-kh h1 {
+  margin: 0 0 0.7em;
+  font-size: 1.75em;
+}
+.prose-kh h2 {
+  margin: 1.75em 0 0.6em;
+  font-size: 1.3em;
+}
+.prose-kh h3 {
+  margin: 1.4em 0 0.5em;
+  font-size: 1.125em;
+}
+.prose-kh h4 {
+  margin: 1.2em 0 0.4em;
+  font-weight: 600;
+  font-size: 1em;
+}
+
+.prose-kh p {
+  margin: 0 0 1em;
+  line-height: 1.7;
+}
+
+.prose-kh strong {
+  font-weight: 700;
+  color: var(--z900);
+}
+.prose-kh em {
+  font-style: italic;
+}
+
+.prose-kh ul,
+.prose-kh ol {
+  margin: 0 0 1em;
+  padding-left: 1.4em;
+}
+.prose-kh ul {
+  list-style: disc;
+}
+.prose-kh ol {
+  list-style: decimal;
+}
+.prose-kh li {
+  margin-bottom: 0.35em;
+  line-height: 1.7;
+}
+.prose-kh li > p {
+  margin: 0;
+}
+.prose-kh li::marker {
+  color: var(--z400);
+}
+
+.prose-kh blockquote {
+  margin: 0 0 1em;
+  padding-left: 1em;
+  border-left: 3px solid var(--z300);
+  color: var(--z500);
+}
+
+.prose-kh code {
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--z100);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.875em;
+}
+.prose-kh pre {
+  margin: 0 0 1em;
+  padding: 0.9em 1em;
+  border-radius: 10px;
+  background: var(--z100);
+  overflow-x: auto;
+}
+.prose-kh pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.85em;
+}
+
+.prose-kh a {
+  color: var(--color-accent-600);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose-kh hr {
+  margin: 2em 0;
+  border: none;
+  border-top: 1px solid var(--z200);
+}
+
+.prose-kh table {
+  width: 100%;
+  margin: 0 0 1em;
+  border-collapse: collapse;
+  font-size: 0.9375em;
+}
+.prose-kh th,
+.prose-kh td {
+  border: 1px solid var(--z200);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+.prose-kh th {
+  background: var(--z100);
+  font-weight: 600;
+  color: var(--z900);
+}
+
+:root.dark .prose-kh {
+  color: var(--z100);
+}
+:root.dark .prose-kh h1,
+:root.dark .prose-kh h2,
+:root.dark .prose-kh h3,
+:root.dark .prose-kh h4,
+:root.dark .prose-kh strong,
+:root.dark .prose-kh th {
+  color: var(--z100);
+}
+:root.dark .prose-kh li::marker {
+  color: var(--z500);
+}
+:root.dark .prose-kh blockquote {
+  color: var(--z400);
+  border-left-color: var(--z800);
+}
+:root.dark .prose-kh pre,
+:root.dark .prose-kh code,
+:root.dark .prose-kh th {
+  background: var(--z800);
+}
+:root.dark .prose-kh a {
+  color: var(--color-accent-400);
+}
+:root.dark .prose-kh hr,
+:root.dark .prose-kh th,
+:root.dark .prose-kh td {
+  border-color: var(--z800);
 }

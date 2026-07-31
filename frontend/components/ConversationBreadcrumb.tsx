@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Workspace name / Conversation label ▾" above the chat pane. A sibling of
+ *"Workspace name / Conversation label ▾"above the chat pane. A sibling of
  * `ChatPane`, not inside it - `ChatPane`'s own contract is deliberately
  * ids-in/stream-out (see its file header), and resolving workspace/
  * conversation *names* is sidebar-shaped data. Both queries here are already
@@ -53,7 +53,9 @@ export function ConversationBreadcrumb({
   const workspace = workspacesQuery.data?.find((w) => w.id === workspaceId);
   const conversations = conversationsQuery.data ?? [];
   const activeConversation = conversations.find((c) => c.id === conversationId);
-  const activeLabel = conversationId ? conversationLabel(activeConversation) : "New chat";
+  const activeLabel = conversationId
+    ? conversationLabel(activeConversation)
+    : "New chat";
 
   const go = (nextConversationId: string | null) => {
     setOpen(false);
@@ -67,16 +69,19 @@ export function ConversationBreadcrumb({
   return (
     <div className="flex items-center justify-between gap-2 border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
       {/* `panelRef` wraps the toggle button too, not just the dropdown -
-          otherwise a click on the button itself counts as "outside" the
-          dropdown, `useClickOutside` closes it, and the button's own
-          click-through handler immediately reopens it. */}
-      <div ref={panelRef} className="relative flex min-w-0 items-center gap-1.5 text-sm">
+ otherwise a click on the button itself counts as"outside"the
+ dropdown, `useClickOutside` closes it, and the button's own
+ click-through handler immediately reopens it. */}
+      <div
+        ref={panelRef}
+        className="relative flex min-w-0 items-center gap-1.5 text-sm"
+      >
         <span className="truncate text-zinc-500 dark:text-zinc-400">
           {workspace?.name ?? "..."}
         </span>
         {/* zinc-400/500, not 300/700: as a real glyph (not a border) the
-            separator rendered at 1.32:1 in light and 1.79:1 in dark -
-            visually absent rather than subtle. */}
+ separator rendered at 1.32:1 in light and 1.79:1 in dark -
+ visually absent rather than subtle. */}
         <span className="text-zinc-400 dark:text-zinc-500">/</span>
         <button
           type="button"
@@ -84,7 +89,13 @@ export function ConversationBreadcrumb({
           className="flex items-center gap-1 truncate rounded px-1.5 py-0.5 font-medium text-zinc-900 hover:bg-zinc-100 dark:text-zinc-100 dark:hover:bg-zinc-900"
         >
           <span className="truncate">{activeLabel}</span>
-          <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")} aria-hidden />
+          <ChevronDown
+            className={cn(
+              "size-3.5 shrink-0 transition-transform",
+              open && "rotate-180",
+            )}
+            aria-hidden
+          />
         </button>
 
         {open && (
@@ -93,7 +104,7 @@ export function ConversationBreadcrumb({
           // full-bleed hover item touching a rounded container's curve reads
           // as clipped, regardless of `overflow-hidden`. See AccountMenu for
           // the same fix.
-          <div className="absolute left-0 top-full z-20 mt-1 w-64 rounded-md border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="absolute left-0 top-full z-20 mt-1 w-64 rounded-md border border-zinc-200 bg-white p-1.5 dark:border-zinc-800 dark:bg-zinc-950">
             {conversations.map((conversation) => (
               <button
                 key={conversation.id}
@@ -106,8 +117,13 @@ export function ConversationBreadcrumb({
                     : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900",
                 )}
               >
-                <MessageSquare className="size-3.5 shrink-0 opacity-60" aria-hidden />
-                <span className="truncate">{conversationLabel(conversation)}</span>
+                <MessageSquare
+                  className="size-3.5 shrink-0 opacity-60"
+                  aria-hidden
+                />
+                <span className="truncate">
+                  {conversationLabel(conversation)}
+                </span>
               </button>
             ))}
 

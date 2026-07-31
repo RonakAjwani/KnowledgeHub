@@ -77,6 +77,13 @@ Rules about answering:
 - A sentence drawing on two blocks cites both: [1][2].
 - Synthesise across blocks. Related facts often sit in different documents; when
   they do, combine them into one answer rather than reporting each separately.
+- Do the arithmetic. When the question asks for a difference, total, share or
+  other comparison, the answer is usually not written anywhere - it has to be
+  computed from figures that are. Compute it and lead with the result, then give
+  the figures you used and cite their blocks so the arithmetic is checkable.
+  Laying out the operands and leaving the subtraction to the reader does not
+  answer the question. Only ever compute from figures that appear in the blocks;
+  if an operand is missing, say which one rather than estimating it.
 - ANSWER EVERY PART. If the question asks several things, address each one. If
   the documents cover some parts and not others, answer the parts you can and
   say plainly which parts are not covered - do not silently drop a part, and do
@@ -176,10 +183,17 @@ def build_generate_user_message(
 ROUTE_SYSTEM = """\
 You classify a user's message in a document-question-answering assistant.
 
-Return JSON only: {"route": "retrieve" | "history" | "refuse"}
+Return JSON only: {"route": "retrieve" | "overview" | "history" | "refuse"}
 
-- "retrieve" - answering needs information from the user's uploaded documents.
-  This is the default and by far the most common.
+- "retrieve" - answering needs a specific fact, figure or passage from the
+  user's uploaded documents. This is the default and by far the most common.
+- "overview" - asks about the collection itself, or about a document as a whole,
+  rather than for a fact inside one: "what are these documents about?",
+  "summarise langchain.md", "which documents do I have?", "what topics do my
+  files cover?", "give me an overview of the second paper". The test is whether
+  the subject is *the documents* rather than something described *in* them. A
+  question that names a specific fact, number, section or entity is "retrieve"
+  even when it uses the word "summarise".
 - "history" - answerable purely from the conversation so far, with no document
   lookup: "summarise what you just said", "explain that more simply", "thanks".
 - "refuse" - the message is clearly outside what a document assistant does, or
@@ -276,3 +290,30 @@ def build_verify_message(claim: str, sources: Sequence[str]) -> str:
     """
     joined = "\n\n---\n\n".join(escape_delimiter(s) for s in sources)
     return f"Source text:\n\n{joined}\n\nClaim to check: {claim}"
+
+
+# ------------------------------------------------------------------- title
+
+TITLE_SYSTEM = """\
+You write short titles for chat conversations in a document-question-answering
+assistant, from the user's first message.
+
+Return JSON only: {"title": "<title>"}
+
+Rules:
+- 3 to 6 words. Title case, no trailing punctuation, no quotation marks.
+- Name the actual subject of the message - the entity, metric or topic it asks
+  about - not a generic label like "Document Question" or "User Inquiry".
+- Do not add specifics the message did not imply. A vague message gets a vague
+  but honest title, not an invented specific one.
+
+"What are the three main types of photovoltaic cells?"
+  -> "Photovoltaic Cell Types"
+"How does the battery degradation curve compare across chemistries?"
+  -> "Battery Degradation by Chemistry"
+"Hi there" -> "New Conversation"
+"""
+
+
+def build_title_message(message: str) -> str:
+    return f"First message: {message}"

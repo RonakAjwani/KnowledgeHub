@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import models as db
-from app.models.schemas import RetrievedChunk
+from app.models.schemas import DocumentStatus, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,28 @@ async def hydrate_candidates(
         )
 
     return hydrated
+
+
+async def load_ready_doc_ids(session: AsyncSession, user_id: str) -> list[str]:
+    """Every document this user can be asked about, scoped by ``user_id`` (I3).
+
+    Overview questions are answered on coverage, and coverage cannot be obtained
+    from a ranked search: one global query returns whatever is topically closest
+    and clusters on a couple of documents, so "which documents do I have" names
+    the two it happened to hit. Retrieving per document needs the list of
+    documents, and this is it.
+
+    Only ``ready`` documents. A document still parsing has no vectors to search,
+    and one that failed has nothing to say - including either would advertise a
+    document the user cannot actually query.
+    """
+    result = await session.execute(
+        select(db.Document.id).where(
+            db.Document.user_id == user_id,
+            db.Document.status == str(DocumentStatus.READY),
+        )
+    )
+    return [row[0] for row in result.all()]
 
 
 async def load_filenames(

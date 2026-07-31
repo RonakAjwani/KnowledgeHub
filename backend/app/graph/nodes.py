@@ -58,6 +58,8 @@ logger = logging.getLogger(__name__)
 
 # (user_id, candidates) -> candidates with text filled in from Postgres.
 Hydrator = Callable[[str, list[RetrievedChunk]], Awaitable[list[RetrievedChunk]]]
+# user_id -> the documents that can be searched. Only the overview path needs it.
+DocLister = Callable[[str], Awaitable[list[str]]]
 
 
 @dataclass
@@ -78,6 +80,10 @@ class Deps:
     # the reranker scores blank documents and the model is handed empty DATA
     # blocks. Optional here only so node tests can pass pre-filled candidates.
     hydrate: Hydrator | None = None
+    # Supplies the document list for the overview path. Optional: without it
+    # `overview` degrades to an ordinary ranked search, which answers but with
+    # whatever coverage the ranking happens to give.
+    list_docs: DocLister | None = None
 
     @classmethod
     def default(cls) -> Deps:
@@ -349,10 +355,67 @@ async def _hydrate(
     return await deps.hydrate(state["user_id"], candidates)
 
 
+async def _search_per_document(
+    state: QueryState, deps: Deps, query: str
+) -> list[RetrievedChunk]:
+    """Top-k from *each* document, rather than top-k across all of them.
+
+    Ranked search answers "what is closest to this query", which is the right
+    question for a lookup and the wrong one for an overview. MEASURED: asked
+    "which documents do I have" against a four-document corpus, one global
+    search returned twelve chunks drawn from **two** documents, and no amount of
+    extra budget changed that - the ranking simply prefers those two, so the
+    answer named two of four files. Coverage has to be built in, not hoped for.
+
+    One search per document, fanned out concurrently, each capped at
+    ``overview_chunks_per_doc``. Every document is represented by construction,
+    so a listing is complete and a summary is not written from a keyhole.
+    """
+    doc_ids = state.get("selected_doc_ids") or await deps.list_docs(state["user_id"])  # type: ignore[misc]
+    if not doc_ids:
+        return []
+
+    embedded = await asyncio.to_thread(deps.embedder.embed_query, query)
+    per_doc = deps.settings.overview_chunks_per_doc
+
+    results = await asyncio.gather(
+        *(
+            deps.store.hybrid_search(
+                embedded, user_id=state["user_id"], doc_ids=[doc_id], limit=per_doc
+            )
+            for doc_id in doc_ids
+        ),
+        return_exceptions=True,
+    )
+
+    merged: list[RetrievedChunk] = []
+    for doc_id, result in zip(doc_ids, results, strict=True):
+        if isinstance(result, BaseException):
+            # One unreachable document costs that document's coverage, not the
+            # turn. The others still answer.
+            logger.warning("overview search failed for doc %s: %s", doc_id, result)
+            continue
+        merged.extend(_to_candidate(point, deps.settings) for point in result)
+    return merged
+
+
 async def retrieve_node(state: QueryState, deps: Deps) -> dict:
     """Combine the two formulations - or skip the second call entirely."""
     raw_candidates = state.get("raw_candidates", [])
     attempt = state.get("attempt", 0)
+
+    # Overview questions are about coverage, so they retrieve by document rather
+    # than by rank. Falls through to the ordinary path when no lister is wired.
+    if state.get("route") == Route.OVERVIEW and deps.list_docs is not None:
+        spread = await _search_per_document(
+            state, deps, state.get("effective_query", state["raw_query"])
+        )
+        if spread:
+            return {
+                "candidates": await _hydrate(state, deps, spread),
+                "attempt": attempt,
+            }
+        logger.warning("overview per-document search returned nothing; using rank")
 
     # Nothing to resolve, or the rewrite degraded: the raw set is the answer.
     # Skipping here is the design working, not a shortcut - it avoids a Qdrant
@@ -507,7 +570,23 @@ async def grade_node(state: QueryState, deps: Deps) -> dict:
     floor = applicable_floor(status, deps.settings)
     attempt = state.get("attempt", 0)
 
-    if relevance >= floor:
+    # The floor asks "is any retrieved passage relevant enough to answer from?".
+    # For a question about the documents *themselves* that is the wrong question,
+    # and it is wrong in a way that always abstains: a reranker scores passages
+    # for topical relevance, and no single passage is topically relevant to
+    # "what is this document about". MEASURED - six of seven orientation
+    # questions scored 0.05-0.19 against a 0.35 floor and abstained, including
+    # every phrasing of the first thing anyone asks a fresh corpus.
+    #
+    # Bypassing the floor here is not bypassing refusal. G2 is a backstop; G3's
+    # grounding prompt is what actually declines, and it still runs - if the
+    # passages do not support an answer the model still says so. Verified that
+    # the route does not become a hole: every should-decline question in the
+    # golden set still classifies as `retrieve`, so none of them reach this
+    # branch.
+    if state.get("route") == Route.OVERVIEW and candidates:
+        grade = Grade.PASS
+    elif relevance >= floor:
         grade = Grade.PASS
     elif attempt == 0:
         grade = Grade.RETRY
@@ -571,6 +650,15 @@ def context_budget(state: QueryState, settings: Settings | None = None) -> int:
     sounding complete. Capped: the limit is attention, not context size.
     """
     cfg = settings or get_settings()
+    # An overview question is about breadth, not depth: "which documents do I
+    # have" can only name the files whose chunks are in front of the model, and
+    # "summarise this document" writes about the sections it was shown. At the
+    # usual top-5 both answer from a keyhole - MEASURED: the document listing
+    # named three of four files, and the summary covered one section of a file
+    # with many. This is the one query shape where the limit is coverage rather
+    # than attention, so it gets the full chunk budget.
+    if state.get("route") == Route.OVERVIEW:
+        return cfg.max_context_chunks
     sub_queries = max(1, len(state.get("effective_queries") or [1]))
     return min(cfg.rerank_top_n * sub_queries, cfg.max_context_chunks)
 
@@ -623,6 +711,10 @@ def build_generate_messages(
     to be the safety net.
     """
     cfg = get_settings()
+    # An explicit override always wins - the rate-limit fallback passes one, and
+    # its whole purpose is to build *smaller* than the default.
+    if context_tokens is None and state.get("route") == Route.OVERVIEW:
+        context_tokens = cfg.max_context_tokens_overview
     if context_tokens is not None:
         cfg = cfg.model_copy(update={"max_context_tokens": context_tokens})
 

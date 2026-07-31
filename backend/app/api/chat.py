@@ -20,7 +20,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -29,14 +29,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.sse import SSE_HEADERS, with_heartbeat
 from app.api.turn import TurnRunner, run_verification
 from app.auth import UserId
+from app.config import get_settings
 from app.db import models as db
-from app.db.session import get_session
+from app.db.session import get_session, get_sessionmaker
 from app.errors import NotFound
+from app.graph import prompts
 from app.graph.nodes import Deps
 from app.graph.state import initial_state
+from app.llm.client import LLMError, Message, get_llm_client
 from app.memory.conversation import load_memory, update_memory
 from app.models.schemas import Citation
-from app.retrieval.hydrate import hydrate_candidates, load_filenames
+from app.retrieval.hydrate import (
+    hydrate_candidates,
+    load_filenames,
+    load_ready_doc_ids,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
@@ -61,11 +68,24 @@ class ChatRequest(BaseModel):
 async def chat(
     request: ChatRequest,
     user_id: UserId,
+    background: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     conversation = await _ensure_conversation(
         session, user_id, request.conversation_id, request.workspace_id
     )
+    # First turn on this conversation (brand-new, or an older one from before
+    # this existed). The truncated title lands immediately - a real model
+    # call on the request path would add latency to the one thing the user is
+    # actually waiting on, for a chat name nobody is watching populate live.
+    # `_generate_title` then runs after the stream closes and overwrites it
+    # with a proper summary; if that call fails or never fires (the client
+    # disconnected before the response finished sending, so `BackgroundTasks`
+    # never ran), the truncated title is still there; nothing regresses to
+    # "Untitled chat".
+    is_first_turn = conversation.title is None
+    if is_first_turn:
+        conversation.title = _derive_title(request.message)
     selected_doc_ids = request.selected_doc_ids
     if selected_doc_ids is None and conversation.workspace_id is not None:
         # Scope to the workspace's own documents rather than every document the
@@ -95,6 +115,8 @@ async def chat(
     # Hydration needs this request's session; without it candidates reach the
     # reranker and the model with empty text.
     deps.hydrate = functools.partial(hydrate_candidates, session)
+    # The overview route retrieves per document, so it needs the document list.
+    deps.list_docs = functools.partial(load_ready_doc_ids, session)
 
     state = initial_state(
         user_id=user_id,
@@ -176,9 +198,81 @@ async def chat(
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory update failed: %s", exc)
 
+    if is_first_turn:
+        background.add_task(_generate_title, conversation.id, request.message)
+
     return StreamingResponse(
         with_heartbeat(source()), media_type="text/event-stream", headers=SSE_HEADERS
     )
+
+
+TITLE_MAX_CHARS = 60
+
+
+def _derive_title(message: str) -> str:
+    """A chat's sidebar name, taken straight from its first message.
+
+    Truncated on a word boundary rather than mid-word - a title sits in the
+    sidebar and gets read on every visit, not skimmed once like a citation
+    snippet, so "...three main types of pho" reads as broken in a way a
+    clean cut at the last whole word before the limit does not.
+    """
+    text = " ".join(message.split())
+    if len(text) <= TITLE_MAX_CHARS:
+        return text
+    truncated = text[:TITLE_MAX_CHARS]
+    last_space = truncated.rfind(" ")
+    if last_space > TITLE_MAX_CHARS // 2:
+        truncated = truncated[:last_space]
+    return truncated.rstrip() + "…"
+
+
+async def _generate_title(conversation_id: str, message: str) -> None:
+    """Upgrade the truncated title to a short, real summary - the same idea
+    ChatGPT/Claude use for chat names, rather than just the question's own
+    opening words.
+
+    Runs after `POST /chat`'s response has finished sending (`BackgroundTasks`
+    - see the call site), with its own DB session: the request's is closed by
+    then. Uses `llm_model_route`, the fastest configured model - the same
+    choice `route_node` makes for the same reason (contract: "latency-critical
+    mechanical roles get the fastest model"), which fits a 3-6 word title
+    better than it fits routing.
+
+    Best-effort and silent on failure. This is a cosmetic upgrade over a title
+    that already exists and is already reasonable (`_derive_title`'s own
+    output), not a step anything else depends on - there is no turn left to
+    degrade and no SSE connection left to tell.
+    """
+    settings = get_settings()
+    llm = get_llm_client()
+    try:
+        result = await llm.complete_json(
+            [
+                Message(role="system", content=prompts.TITLE_SYSTEM),
+                Message(role="user", content=prompts.build_title_message(message)),
+            ],
+            model=settings.llm_model_route,
+            max_tokens=32,
+            timeout=settings.timeout_llm_route_s,
+        )
+        title = str(result.get("title", "")).strip()
+    except (LLMError, ValueError) as exc:
+        logger.warning("title generation failed for %s: %s", conversation_id, exc)
+        return
+    if not title:
+        return
+
+    maker = get_sessionmaker()
+    async with maker() as session:
+        conversation = await session.get(db.Conversation, conversation_id)
+        # Gone, or already renamed by something else in the meantime (the
+        # user could in principle have already deleted this chat) - either
+        # way, nothing here should resurrect or overwrite it.
+        if conversation is None:
+            return
+        conversation.title = title[:TITLE_MAX_CHARS]
+        await session.commit()
 
 
 async def _ensure_conversation(
@@ -251,6 +345,27 @@ async def get_conversation(
         **_serialise_conversation(conversation),
         "messages": [await _serialise_message(session, user_id, m) for m in messages],
     }
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_conversation(
+    conversation_id: str,
+    user_id: UserId,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Delete one conversation, the same shape as `delete_workspace`.
+
+    No `IngestPipeline` step to mirror here - a conversation has no Qdrant
+    footprint of its own (only documents do), so unlike a workspace's
+    document-by-document cleanup, `messages` -> `message_citations` cascading
+    in Postgres is the whole deletion and nothing is left orphaned in another
+    store.
+    """
+    conversation = await session.get(db.Conversation, conversation_id)
+    if conversation is None or conversation.user_id != user_id:
+        raise NotFound("No such conversation.")
+    await session.delete(conversation)
+    await session.commit()
 
 
 async def _serialise_message(

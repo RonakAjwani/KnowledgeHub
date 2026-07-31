@@ -16,7 +16,15 @@
  * clicking the panel itself does not.
  */
 
-import { LogOut, Monitor, Moon, Settings as SettingsIcon, Sun, User, X } from "lucide-react";
+import {
+  LogOut,
+  Monitor,
+  Moon,
+  Settings as SettingsIcon,
+  Sun,
+  User,
+  X,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
@@ -32,18 +40,33 @@ const SECTIONS: { id: SectionId; label: string; Icon: LucideIcon }[] = [
   { id: "account", label: "Account", Icon: User },
 ];
 
-const APPEARANCE_OPTIONS: { value: Theme; label: string; Icon: LucideIcon }[] = [
-  { value: "system", label: "System", Icon: Monitor },
-  { value: "light", label: "Light", Icon: Sun },
-  { value: "dark", label: "Dark", Icon: Moon },
-];
+const APPEARANCE_OPTIONS: { value: Theme; label: string; Icon: LucideIcon }[] =
+  [
+    { value: "system", label: "System", Icon: Monitor },
+    { value: "light", label: "Light", Icon: Sun },
+    { value: "dark", label: "Dark", Icon: Moon },
+  ];
 
 // ------------------------------------------------------------------ panels
 
-function Avatar({ imageUrl, name, className }: { imageUrl: string | null; name: string; className?: string }) {
+function Avatar({
+  imageUrl,
+  name,
+  className,
+}: {
+  imageUrl: string | null;
+  name: string;
+  className?: string;
+}) {
   if (imageUrl) {
-    // eslint-disable-next-line @next/next/no-img-element -- a remote Clerk-hosted avatar, not a local asset next/image would optimise
-    return <img src={imageUrl} alt={name} className={cn("rounded-full object-cover", className)} />;
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- a remote Clerk-hosted avatar, not a local asset next/image would optimise
+      <img
+        src={imageUrl}
+        alt={name}
+        className={cn("rounded-full object-cover", className)}
+      />
+    );
   }
   return (
     <span
@@ -81,7 +104,7 @@ function AppearanceControl() {
           className={cn(
             "flex size-8 items-center justify-center rounded-md",
             theme === value
-              ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-zinc-100"
+              ? "bg-white text-zinc-900 dark:bg-zinc-700 dark:text-zinc-100"
               : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
           )}
         >
@@ -111,9 +134,11 @@ function GeneralPanel({ account }: { account: AccountInfo }) {
 
         {!CLERK_ENABLED ? (
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Running without auth. Profile fields need a Clerk key
-            (<code className="font-mono text-xs">NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code>)
-            to have a real profile to edit.
+            Running without auth. Profile fields need a Clerk key (
+            <code className="font-mono text-xs">
+              NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+            </code>
+            ) to have a real profile to edit.
           </p>
         ) : (
           <>
@@ -121,7 +146,11 @@ function GeneralPanel({ account }: { account: AccountInfo }) {
               <span className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
                 Avatar
               </span>
-              <Avatar imageUrl={account.imageUrl} name={account.fullName} className="mt-2 size-12" />
+              <Avatar
+                imageUrl={account.imageUrl}
+                name={account.fullName}
+                className="mt-2 size-12"
+              />
             </div>
 
             <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
@@ -140,7 +169,11 @@ function GeneralPanel({ account }: { account: AccountInfo }) {
                     "dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100",
                   )}
                 />
-                {saved && <span className="text-xs text-emerald-600 dark:text-emerald-400">Saved</span>}
+                {saved && (
+                  <span className="text-xs text-emerald-600 dark:text-emerald-400">
+                    Saved
+                  </span>
+                )}
               </div>
             </label>
           </>
@@ -148,12 +181,14 @@ function GeneralPanel({ account }: { account: AccountInfo }) {
       </div>
 
       {/* Unlike Profile, Appearance is a local preference (localStorage,
-          not Clerk) - it works identically with or without auth, so it
-          isn't gated behind `CLERK_ENABLED` the way the fields above are. */}
+ not Clerk) - it works identically with or without auth, so it
+ isn't gated behind `CLERK_ENABLED` the way the fields above are. */}
       <div className="space-y-3 border-t border-zinc-200 pt-6 dark:border-zinc-800">
         <SectionHeading>Preferences</SectionHeading>
         <div className="flex items-center justify-between gap-3">
-          <span className="text-sm text-zinc-700 dark:text-zinc-300">Appearance</span>
+          <span className="text-sm text-zinc-700 dark:text-zinc-300">
+            Appearance
+          </span>
           <AppearanceControl />
         </div>
       </div>
@@ -203,7 +238,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      // True-black scrim via an explicit rgba, NOT `bg-black/40`:
+      // `--color-black` is indirected to `--surface-black`, which inverts to
+      // near-white in dark mode, so `bg-black/40` painted a WHITE veil over
+      // the dark app instead of dimming it (measured at oklab L=0.94).
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(0_0_0/0.45)] p-4"
       onClick={onClose}
       onKeyDown={(event) => {
         if (event.key === "Escape") onClose();
@@ -214,7 +253,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         aria-modal="true"
         aria-label="Settings"
         onClick={(event) => event.stopPropagation()}
-        className="flex h-[32rem] w-full max-w-2xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950"
+        className="flex h-[32rem] w-full max-w-2xl overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
       >
         <nav className="w-44 shrink-0 border-r border-zinc-200 bg-zinc-50/60 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
           <p className="px-2 pb-1 text-[0.7rem] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">

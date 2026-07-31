@@ -47,7 +47,7 @@ from app.graph.verify import split_claims
 from app.ingest.embed import Embedder
 from app.llm.client import LLMClient
 from app.memory.conversation import load_memory
-from app.retrieval.hydrate import hydrate_candidates
+from app.retrieval.hydrate import hydrate_candidates, load_ready_doc_ids
 from app.retrieval.qdrant_store import QdrantStore
 from app.retrieval.rerank import Reranker
 from evals.corpus import BY_FILENAME, BY_KEY
@@ -150,11 +150,85 @@ def doc_key(doc_id: str) -> str:
     return DOC_KEYS.get(doc_id, doc_id[:8])
 
 
+# Markers are plain prose, but answers are markdown, and emphasis lands *inside*
+# the phrase being matched: E2 declined with "the figure is **not available** in
+# the documents provided" and was scored as a hallucination, because the bold
+# markers split "not available in" into "not available** in". Emphasis is a
+# rendering detail with no bearing on whether a sentence refuses, so it comes off
+# before matching. Left in place elsewhere - `present()` still matches golden
+# facts against the raw answer, where markdown does not separate the characters
+# of a number or a name.
+_EMPHASIS_RE = re.compile(r"[*_`]+")
+
+
+def _plain(text: str) -> str:
+    """Lowercase, with markdown emphasis removed so phrase matching survives it."""
+    return _EMPHASIS_RE.sub("", text).lower()
+
+
 def looks_like_decline(answer: str, grade: str) -> bool:
+    """Did this turn decline *at all*? Used to grade should-decline questions.
+
+    Deliberately permissive, and correct for that job: on a question whose right
+    answer is "I don't know", a hedge anywhere in the response is the model
+    declining, however much prose surrounds it.
+    """
     if grade == str(Grade.ABSTAIN):
         return True
-    lowered = answer.lower()
+    lowered = _plain(answer)
     return any(marker in lowered for marker in _DECLINE_MARKERS)
+
+
+def is_refusal(answer: str, grade: str) -> bool:
+    """Is this answer a refusal *as a whole*? Used to grade answerable questions.
+
+    The distinction from :func:`looks_like_decline` is the entire point, and
+    conflating the two was scoring correct answers as refusals. A grounded
+    answer to a multi-part question routinely answers what the documents support
+    and then names what they do not - "Mr. Patel manages four funds [1][4]...
+    The documents do not provide tenure detail for Mr. Mody" - and a scan for a
+    decline phrase *anywhere* reads that closing caveat as a refusal of the
+    whole question. Worse, the caveat is sometimes not a caveat at all: D3's
+    trigger was "with no mention of figure generation", which is the comparative
+    finding the question asked for.
+
+    So two signals, both properties of this pipeline rather than of any corpus,
+    which is what makes them hold on a reviewer's documents as well as ours:
+
+    * **A grounded answer cites.** Every answering path attaches ``[n]`` markers;
+      the abstain text carries none. One citation anywhere means the model
+      answered from the passages, so it did not refuse.
+    * **A refusal declares itself first.** It opens by saying it cannot answer.
+      A decline phrase that appears only after substantive claims is a
+      qualification of an answer, not a refusal of the question.
+
+    Claims are split with the pipeline's own :func:`split_claims`, so bulleted
+    answers - which carry no terminal punctuation and defeat a plain sentence
+    split - are segmented the same way generation and verification segment them.
+    """
+    if grade == str(Grade.ABSTAIN):
+        return True
+
+    claims = split_claims(answer)
+    if not claims:
+        # Nothing claim-shaped to reason about; fall back to the plain scan.
+        return looks_like_decline(answer, grade)
+
+    if any(claim.markers for claim in claims):
+        return False
+
+    return any(
+        marker in _plain(claim.text)
+        for claim in claims[:_REFUSAL_OPENING_CLAIMS]
+        for marker in _DECLINE_MARKERS
+    )
+
+
+# A refusal announces itself up front, but not always in the very first breath:
+# "I searched your documents. They do not contain an F1 score." puts the marker
+# in the second claim. Two is enough for the preamble without reaching into the
+# body of a substantive answer.
+_REFUSAL_OPENING_CLAIMS = 2
 
 
 _NUMERIC = re.compile(r"^\d[\d,.]*$")
@@ -181,13 +255,15 @@ def present(needle: str, answer_lower: str) -> bool:
 
 def grade_answer(question: Question, answer: str, grade: str) -> tuple[bool, bool, list[str]]:
     """Returns (passed, declined, missing_substrings)."""
-    declined = looks_like_decline(answer, grade)
-
     if question.expect is Expect.DECLINE:
         # The whole test. A confident, specific, plausible answer here is a
-        # failure however well it reads.
+        # failure however well it reads - so any hedge counts as declining.
+        declined = looks_like_decline(answer, grade)
         return declined, declined, []
 
+    # On an answerable question the bar is the opposite one: only an answer that
+    # refuses *as a whole* disqualifies. See `is_refusal`.
+    declined = is_refusal(answer, grade)
     lowered = answer.lower()
     # `must_include_all` is a conjunction - every part of a multi-part question
     # has to be answered. `must_include` is a disjunction: any one hit means the
@@ -394,7 +470,12 @@ async def run_question(
         citations=len(used),
         docs_cited=cited,
         latency_s=round(elapsed, 1),
-        answer=answer.replace("\n", " ")[:400],
+        # 400 was too short to debug from: a grading decision that turns on a
+        # clause near the end of a 1,400-character answer is invisible in the
+        # artifact, so diagnosing one costs a whole rerun of the suite. Storing
+        # the answer whole removes that; the results file is read by a person
+        # and by nothing that cares about its size.
+        answer=answer.replace("\n", " "),
         missing=missing,
         degradations=[f"{d.stage}/{d.reason}" for d in result.get("degradations", [])],
         model=settings.llm_model_generate,
@@ -521,6 +602,7 @@ async def main() -> int:
             reranker=reranker,
             settings=settings,
             hydrate=functools.partial(hydrate_candidates, session),
+            list_docs=functools.partial(load_ready_doc_ids, session),
         )
         for question in selected:
             try:

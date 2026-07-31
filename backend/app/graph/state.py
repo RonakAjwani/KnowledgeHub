@@ -20,6 +20,10 @@ from app.models.schemas import Citation, Degradation, RetrievedChunk
 
 class Route(StrEnum):
     RETRIEVE = "retrieve"
+    # Asks about the collection, or about a document as a whole, rather than for
+    # a fact inside one. Retrieves exactly like RETRIEVE - it differs only at the
+    # gate, which is the wrong test for this shape of question. See `grade_node`.
+    OVERVIEW = "overview"
     HISTORY = "history"
     REFUSE = "refuse"
 

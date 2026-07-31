@@ -20,7 +20,13 @@ export default function SignUpPage() {
   }
 
   return (
-    <AuthShell>
+    // Sign-up gets its own headline: the default ("Ask your documents
+    // anything") is written for someone returning to a corpus they already
+    // have, which is the wrong promise to make to a first-time visitor.
+    <AuthShell
+      title="Start asking your documents anything"
+      subtitle="Upload a document, ask a question, and check the answer against the source"
+    >
       <ThemedClerkForm mode="sign-up" />
     </AuthShell>
   );
