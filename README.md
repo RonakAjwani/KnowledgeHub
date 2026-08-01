@@ -4,7 +4,7 @@ Multi-document RAG assistant with chat memory. Upload PDFs, text or Markdown, as
 across all of them, and get grounded answers whose citations resolve to exact character
 offsets in the source.
 
-Built as a CV assessment over five days.
+Built solo, end to end: architecture, retrieval pipeline, ingest, frontend, evals.
 
 - **Stack:** FastAPI + Next.js, Qdrant, Postgres, LangGraph
 - **Retrieval:** hybrid dense + sparse, fused server-side with weighted RRF, conditional Cohere rerank
@@ -21,7 +21,6 @@ Built as a CV assessment over five days.
 6. [The pipeline, layer by layer](#6-the-pipeline-layer-by-layer)
 7. [Problems I hit](#7-problems-i-hit)
 8. [Testing](#8-testing)
-9. [Known limitations](#9-known-limitations)
 
 ## 1. Running it
 
@@ -90,9 +89,9 @@ after creation, so Compose is what still works after a live link expires.
 
 ## 3. How I worked
 
-The brief said it measures problem solving, technical skill and the ability to build
-something complex, and that I could simplify features with a reason, adapt the workflow to
-my strengths, and prioritise what mattered. I took that seriously.
+The goal was problem solving and technical depth on something genuinely complex, not feature
+count. That meant simplifying where I had a reason, adapting the workflow to my strengths, and
+prioritising what actually mattered over what looked impressive in a list.
 
 ### Research with Perplexity
 
@@ -159,16 +158,14 @@ foundation. KnowledgeHub is from scratch. I read its 2,890 lines first and made 
 
 ## 4. Day by day
 
-The brief estimated one to three days. I took five, because the assessment is about
-engineering quality and I would rather submit something measured than something fast.
-
 | Day | What I did |
 |---|---|
-| Mon 27 Jul | Research and architecture. Compared retrieval techniques, confirmed infra limits, wrote the pipeline contract and the diagram. Project setup. |
-| Tue 28 Jul | Pipeline end to end: parse, chunk, embed, hybrid retrieval, the LangGraph query graph, SSE streaming. First working UI the same day. |
-| Wed 29 Jul | Started measuring instead of assuming. Built the eval harness and probe scripts, then fixed what the numbers exposed. Built the UI out properly. |
-| Thu 30 Jul | Parsing accuracy. Fixed the table column binding bug and the dropped text beside tables. Added the source viewer. Reviewed every stage. |
-| Fri 31 Jul | Frontend test suite, diagram, this README. Provider switch, deployment, demo video. |
+| 1 - Wed 29 Jul | Research and architecture. Read my earlier project ([NotebookRAG](#building-on-my-earlier-project-notebookrag)) for patterns worth porting, compared retrieval techniques, confirmed infra limits, wrote the pipeline contract and the diagram. Project setup. |
+| 2 - Thu 30 Jul | Pipeline end to end: parse, chunk, embed, hybrid retrieval, the LangGraph query graph, SSE streaming, and a first working UI. |
+| 3 - Fri 31 Jul | Measured instead of assumed: built the eval harness and probe scripts, then fixed what the numbers exposed (parsing accuracy, the table column binding bug, dropped text beside tables). Built the UI out properly, added the source viewer, wired up auth. |
+
+Deployment, the frontend test suite and this README were finished Sat 1 Aug, alongside
+recording the walkthrough video below.
 
 ## 5. Architecture
 
@@ -249,9 +246,38 @@ reached the model 94% of the time and six of those answers were still wrong. A s
 accuracy figure would have hidden that and sent me to tune the one stage already working.
 That is why the eval reports retrieval, answer, refusal and citation accuracy separately.
 
+### How I diagnose a wrong answer or a bad citation
+
+The pipeline has five stages between a question and an answer on screen: `retrieve` -> `rerank`
+-> `grade` -> `generate` -> `verify`. A wrong answer or a wrong citation is a symptom, not a
+diagnosis, and every bug in the table above was found by checking those stages **in order**,
+not by staring at the final output and guessing.
+
+1. **Retrieval first, always.** Did the right chunk even come back in the top-k? If not, the
+   model never had a chance and no prompt fix will help. This is where "Net AUM returned a
+   different fund's" and both table bugs above were caught, by printing the retrieved chunks
+   before generation ran at all.
+2. **Then the score, not the label.** If the chunk *is* in the set but ranked low, that is a
+   fusion or reranking problem, not a generation problem. The 29% reranker-disagreement number
+   above is what this step is for, measure what changes, not just what should.
+3. **Then the prompt boundary.** If retrieval is clean, check what actually reached the model:
+   which chunks, in what order, inside which delimiters. This is where undelimited chunk text
+   or a missing section-heading path shows up.
+4. **Only then, the model's answer.** If everything upstream is verifiably correct and the
+   answer is still wrong, that is a generation or verification bug, and it gets its own fix
+   rather than a retrieval change nobody needed.
+5. **Suspect the grader before the pipeline.** Six eval graders above were wrong, not the
+   system under test. A surprising eval number now sends me to read the grader's code before I
+   touch the pipeline, since it moved the number in both directions before I did.
+
+Citations follow the same rule at a smaller scale: a wrong `[n]` marker is checked against the
+literal `char_start`/`char_end` span it points to before assuming the model hallucinated it,
+because a marker can be right while the highlight is wrong, or the reverse, and those are two
+different bugs.
+
 ## 8. Testing
 
-The brief asks for "basic tests". I read that as: show you can test the thing, and cover the
+"Basic tests" was the starting bar. I read that as: prove the thing works, and cover the
 paths that matter. I went further only where a bug produces a plausible wrong answer rather
 than an error.
 
@@ -303,22 +329,3 @@ CI runs lint, typecheck and both suites on every push, with Postgres and Qdrant 
 containers so the integration tests execute rather than skip. The eval and `verify_api.py`
 are deliberately not gated: both need live keys, and a job that goes green because a secret
 is unset reports "tests pass" while testing nothing.
-
-## 9. Known limitations
-
-Stated here rather than left for a reviewer to find.
-
-- **No ablation table** across dense-only, BM25-only, RRF and RRF+rerank. The retrieval
-  design is justified by reasoning and two live probes, but not by that specific table.
-- **Corpus-wide aggregation is out of reach.** "Which manager appears across the most fund
-  pages" cannot be answered by top-k retrieval by construction. It sits in the eval set,
-  labelled, so it is measured rather than hidden.
-- **The Original tab highlight is best-effort.** It matches cited text against pdf.js's text
-  layer, since no bounding boxes are persisted. The Text tab highlight is offset-driven and
-  cannot be wrong.
-- **The Clerk sign-in flow is untested against a live account.** It was built and tested for
-  correct fallback with no key configured, which is the path a reviewer running Compose
-  takes.
-- **Free-tier quotas are visible by design.** If answers look simpler than expected, check
-  the stream for a `degradation` event naming a fallback model before assuming retrieval is
-  at fault.

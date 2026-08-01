@@ -1,5 +1,6 @@
-import { Play } from "lucide-react";
 import type { ReactNode } from "react";
+
+import { Logo } from "@/components/ui/logo";
 
 /**
  * The frame both `/sign-in` and `/sign-up` render Clerk's embedded form
@@ -35,7 +36,8 @@ export function AuthShell({
     <div className="flex h-dvh flex-col overflow-y-auto bg-zinc-50 px-6 py-4 sm:px-10 sm:py-5 dark:bg-zinc-950">
       {/* Wordmark is page-centred, not corner-anchored: it reads as the page's
           own masthead sitting above the headline, rather than a nav-bar logo. */}
-      <div className="flex shrink-0 justify-center">
+      <div className="flex shrink-0 items-center justify-center gap-2">
+        <Logo className="size-5 shrink-0 text-zinc-900 dark:text-zinc-100" />
         <span className="text-base font-semibold text-zinc-900 sm:text-lg dark:text-zinc-100">
           KnowledgeHub
         </span>
@@ -74,13 +76,13 @@ export function AuthShell({
         </div>
 
         {/* 16:9, because a product walkthrough clip goes here — the frame
-            should already be the shape of the thing that will fill it, so the
-            layout does not shift when the real video lands. Capped by height
-            too: on a short viewport the row's height is set by the card
-            column, and without a height cap the video box would render at its
-            full aspect-ratio width regardless, overflowing sideways. */}
-        <div className="order-first aspect-video max-h-full w-full lg:order-none">
-          <WalkthroughPlaceholder />
+            is already the shape of the thing that fills it, so the layout
+            does not shift as the video loads. Capped by height too: on a
+            short viewport the row's height is set by the card column, and
+            without a height cap the video box would render at its full
+            aspect-ratio width regardless, overflowing sideways. */}
+        <div className="order-first aspect-video max-h-full w-full overflow-hidden rounded-[28px] border border-zinc-300 bg-zinc-900 dark:border-zinc-800 lg:order-none">
+          <Walkthrough />
         </div>
       </div>
     </div>
@@ -88,23 +90,40 @@ export function AuthShell({
 }
 
 /**
- * Stands in for a short product walkthrough clip. Deliberately an explicit,
- * labelled placeholder rather than stock imagery: an unrelated photo would
- * read as filler, and this states plainly what belongs here.
+ * A short, silent, looping capture of the real product: create a workspace,
+ * upload a document, ask a question, watch the cited answer stream in. Muted
+ * autoplay with `loop` is what lets it play the instant the page loads with
+ * no controls chrome competing with the sign-in card beside it - the same
+ * pattern product landing pages use for a hero clip.
+ *
+ * MP4 (H.264) listed first: Safari has no VP8/webm decoder at all, so a
+ * webm-only source silently renders nothing there - `<source>` picks the
+ * first type the browser can actually play, not the first in file-size
+ * order. The MP4 also carries `+faststart` (moov atom at the front) so
+ * playback can begin from a partial download instead of waiting on the
+ * whole file, and is ~85% smaller than the raw Playwright-recorded webm.
+ *
+ * `poster` is the clip's own first frame, not a separate graphic - without
+ * it, a `<video>` with nothing decoded yet paints as whatever the element's
+ * background resolves to, and for the instant before that resolves the
+ * browser's own default (white) shows through, which read as a flash on
+ * load. The parent's `bg-zinc-900` is the same fix's second layer, in case
+ * the poster itself is still loading.
  */
-function WalkthroughPlaceholder() {
+function Walkthrough() {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-3 rounded-[28px] border border-dashed border-zinc-300 bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/40">
-      <span className="flex size-14 items-center justify-center rounded-full bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300">
-        <Play className="size-6 translate-x-0.5" aria-hidden />
-      </span>
-      <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-        Product walkthrough
-      </p>
-      <p className="max-w-[16rem] text-center text-xs text-zinc-500 dark:text-zinc-400">
-        A short video showing how to upload documents and ask questions goes
-        here.
-      </p>
-    </div>
+    <video
+      className="h-full w-full bg-zinc-900 object-cover"
+      poster="/media/walkthrough-poster.jpg"
+      autoPlay
+      loop
+      muted
+      playsInline
+      preload="auto"
+      aria-label="KnowledgeHub product walkthrough: uploading a document and asking a question with a verified citation"
+    >
+      <source src="/media/walkthrough.mp4" type="video/mp4" />
+      <source src="/media/walkthrough.webm" type="video/webm" />
+    </video>
   );
 }

@@ -39,6 +39,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
+import { useToast } from "@/components/ui/toast";
 
 // -------------------------------------------------------------- constants
 
@@ -141,6 +142,7 @@ export function DocumentManager({
   }, [getToken]);
 
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
   const DOCUMENTS_KEY = documentsKey(workspaceId);
 
   const documentsQuery = useQuery({
@@ -233,6 +235,10 @@ export function DocumentManager({
 
             if (event.type === "document.complete") {
               setLive((prev) => ({ ...prev, [docId]: { status: "ready" } }));
+              const doc = queryClient
+                .getQueryData<DocumentSummary[]>(DOCUMENTS_KEY)
+                ?.find((row) => row.id === docId);
+              showToast(`${doc?.filename ?? "Document"} is ready`);
             } else {
               setLive((prev) => ({
                 ...prev,
@@ -262,7 +268,7 @@ export function DocumentManager({
         }
       })();
     },
-    [queryClient, DOCUMENTS_KEY],
+    [queryClient, DOCUMENTS_KEY, showToast],
   );
 
   useEffect(() => {
@@ -418,10 +424,12 @@ export function DocumentManager({
       return docId;
     },
     onSuccess: (docId) => {
+      const filename = documents.find((doc) => doc.id === docId)?.filename;
       forgetDocument(docId);
       onSelectionChange(selectedDocIds.filter((id) => id !== docId));
       setConfirmingDelete(null);
       void queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY });
+      showToast(`${filename ?? "Document"} deleted`);
     },
   });
 
@@ -446,6 +454,12 @@ export function DocumentManager({
       setConfirmingBulkDelete(false);
       setBulkDeleteErrors(failures);
       void queryClient.invalidateQueries({ queryKey: DOCUMENTS_KEY });
+      const succeeded = ids.length - failures.length;
+      if (succeeded > 0) {
+        showToast(
+          `${succeeded} document${succeeded === 1 ? "" : "s"} deleted`,
+        );
+      }
     },
   });
 
@@ -687,45 +701,39 @@ export function DocumentManager({
             </div>
 
             {confirmingBulkDelete && selectedReady.length > 0 && (
-              <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/30">
-                <p className="text-xs font-medium text-red-800 dark:text-red-300">
+              <div className="flex items-center gap-1.5 rounded-md bg-red-50 py-1.5 pl-3 pr-1.5 dark:bg-red-950/30">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium text-red-800 dark:text-red-200">
                   Delete {selectedReady.length} document
-                  {selectedReady.length === 1 ? "" : "s"} from this workspace?
-                </p>
-                <p className="mt-1 text-xs leading-5 text-red-700 dark:text-red-400">
-                  Their chunks and citation records go with them. This
-                  can&rsquo;t be undone.
-                </p>
+                  {selectedReady.length === 1 ? "" : "s"}?
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs font-semibold text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/50"
+                  disabled={bulkDeleteMutation.isPending}
+                  onClick={() => bulkDeleteMutation.mutate([...selectedReady])}
+                >
+                  {bulkDeleteMutation.isPending && (
+                    <LoaderCircle className="size-3 animate-spin" />
+                  )}
+                  Delete
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                  disabled={bulkDeleteMutation.isPending}
+                  onClick={() => setConfirmingBulkDelete(false)}
+                >
+                  Cancel
+                </Button>
                 {bulkDeleteErrors.length > 0 && (
-                  <ul className="mt-1.5 space-y-0.5 text-xs text-red-700 dark:text-red-300">
+                  <ul className="mt-1.5 basis-full space-y-0.5 text-xs text-red-700 dark:text-red-300">
                     {bulkDeleteErrors.map((message) => (
                       <li key={message}>{message}</li>
                     ))}
                   </ul>
                 )}
-                <div className="mt-2 flex gap-2">
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    disabled={bulkDeleteMutation.isPending}
-                    onClick={() =>
-                      bulkDeleteMutation.mutate([...selectedReady])
-                    }
-                  >
-                    {bulkDeleteMutation.isPending && (
-                      <LoaderCircle className="size-3 animate-spin" />
-                    )}
-                    Delete
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={bulkDeleteMutation.isPending}
-                    onClick={() => setConfirmingBulkDelete(false)}
-                  >
-                    Cancel
-                  </Button>
-                </div>
               </div>
             )}
           </>
@@ -1007,43 +1015,34 @@ function DocumentRow({
 
       {confirming && (
         <div
-          className="absolute inset-0 z-10 flex flex-col justify-center rounded-xl border border-red-300 bg-white p-3.5 dark:border-red-900 dark:bg-zinc-950"
+          role="dialog"
+          aria-label="Confirm delete"
+          className="absolute inset-0 z-10 flex items-center gap-1.5 rounded-xl bg-white pl-3.5 pr-1.5 dark:bg-zinc-950"
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
         >
-          <p className="text-xs font-medium text-red-800 dark:text-red-300">
-            Delete this document?
-          </p>
-          <p className="mt-1 text-xs leading-5 text-red-700 dark:text-red-400">
-            Its chunks and citation records go with it. This can&rsquo;t be
-            undone.
-          </p>
-          {deleteError && (
-            <p className="mt-1.5 text-xs font-medium text-red-800 dark:text-red-200">
-              {deleteError}
-            </p>
-          )}
-          <div className="mt-2 flex gap-2">
-            <Button
-              variant="destructive"
-              size="sm"
-              className="h-7 px-2.5 text-xs"
-              disabled={deleting}
-              onClick={onConfirmDelete}
-            >
-              {deleting && <LoaderCircle className="size-3 animate-spin" />}
-              Delete
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 px-2.5 text-xs"
-              disabled={deleting}
-              onClick={onCancelDelete}
-            >
-              Cancel
-            </Button>
-          </div>
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-red-800 dark:text-red-200">
+            {deleteError ?? "Delete this document?"}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-950/50"
+            disabled={deleting}
+            onClick={onConfirmDelete}
+          >
+            {deleting && <LoaderCircle className="size-3 animate-spin" />}
+            Delete
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            disabled={deleting}
+            onClick={onCancelDelete}
+          >
+            Cancel
+          </Button>
         </div>
       )}
     </div>

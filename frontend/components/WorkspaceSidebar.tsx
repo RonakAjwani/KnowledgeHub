@@ -50,6 +50,8 @@ import {
 import { AccountMenu } from "@/components/AccountMenu";
 import { SidebarToggleButton } from "@/components/SidebarToggleButton";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/ui/logo";
+import { useToast } from "@/components/ui/toast";
 import { useSessionToken } from "@/hooks/useSessionToken";
 import { useConversationMutations } from "@/hooks/useConversationMutations";
 import { useHasMounted } from "@/hooks/useHasMounted";
@@ -70,6 +72,56 @@ function extensionOf(filename: string): string {
 function describeError(error: unknown): string {
   if (error instanceof ApiError) return `${error.message} (${error.code})`;
   return error instanceof Error ? error.message : "Request failed";
+}
+
+// ------------------------------------------------------ inline delete confirm
+
+/**
+ * A single-line delete confirmation: the item's fate stated once, inline,
+ * with the two actions right beside it - no bordered card, no wrapped
+ * two-sentence warning. The previous version (a full-width red-bordered box
+ * with the message on its own line above stacked buttons) took up as much
+ * vertical space as three rows for a decision that's one sentence. "This
+ * can't be undone" is dropped as boilerplate: every delete in this sidebar
+ * is permanent, so the label already implies it without repeating it below.
+ */
+function InlineDeleteConfirm({
+  label,
+  onConfirm,
+  onCancel,
+  className,
+}: {
+  label: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "mt-1 flex items-center gap-1.5 rounded-md bg-red-50 py-1 pl-2 pr-1 dark:bg-red-950/30",
+        className,
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate text-xs font-medium text-red-800 dark:text-red-200">
+        {label}
+      </span>
+      <button
+        type="button"
+        onClick={onConfirm}
+        className="shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/50"
+      >
+        Delete
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="shrink-0 rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-800"
+      >
+        Cancel
+      </button>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------- inline naming
@@ -149,6 +201,7 @@ export function NewWorkspaceDialog({
 }) {
   const getToken = useSessionToken();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   const [name, setName] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -180,6 +233,7 @@ export function NewWorkspaceDialog({
     },
     onSuccess: (workspace) => {
       void queryClient.invalidateQueries({ queryKey: WORKSPACES_KEY });
+      showToast(`Workspace "${workspace.name}" created`);
       onCreated(workspace);
     },
   });
@@ -475,30 +529,14 @@ function ConversationRow({
       </div>
 
       {confirmingDelete ? (
-        <div className="mt-1 rounded-md border border-red-200 bg-red-50 p-2 text-xs dark:border-red-900 dark:bg-red-950/30">
-          <p className="text-red-800 dark:text-red-200">
-            Delete this chat? This cannot be undone.
-          </p>
-          <div className="mt-1.5 flex gap-1.5">
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => {
-                setConfirmingDelete(false);
-                onDelete();
-              }}
-            >
-              Delete
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirmingDelete(false)}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
+        <InlineDeleteConfirm
+          label="Delete this chat?"
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            onDelete();
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
       ) : null}
     </div>
   );
@@ -652,33 +690,15 @@ function WorkspaceRow({
       </div>
 
       {confirmingDelete ? (
-        <div className="ml-5 mt-1 rounded-md border border-red-200 bg-red-50 p-2 text-xs dark:border-red-900 dark:bg-red-950/30">
-          <p className="text-red-800 dark:text-red-200">
-            Delete &ldquo;{workspace.name}&rdquo; and its{" "}
-            {workspace.document_count}{" "}
-            {workspace.document_count === 1 ? "document" : "documents"}? This
-            cannot be undone.
-          </p>
-          <div className="mt-1.5 flex gap-1.5">
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => {
-                setConfirmingDelete(false);
-                onDelete(workspace);
-              }}
-            >
-              Delete
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirmingDelete(false)}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
+        <InlineDeleteConfirm
+          label={`Delete "${workspace.name}"?`}
+          className="ml-5"
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            onDelete(workspace);
+          }}
+          onCancel={() => setConfirmingDelete(false)}
+        />
       ) : null}
 
       {active ? (
@@ -792,7 +812,8 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
   return (
     <aside className={cn("flex h-full flex-col", className)}>
       <div className="flex items-center gap-1.5 px-3 py-3">
-        <span className="flex-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+        <span className="flex flex-1 items-center gap-1.5 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          <Logo className="size-4 shrink-0" />
           KnowledgeHub
         </span>
         <SidebarToggleButton />

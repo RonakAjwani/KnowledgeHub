@@ -10,6 +10,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { useToast } from "@/components/ui/toast";
 import { useSessionToken } from "@/hooks/useSessionToken";
 import { api } from "@/lib/api";
 import { conversationsKey } from "@/lib/queryKeys";
@@ -20,6 +21,7 @@ export function useConversationMutations(
 ) {
   const getToken = useSessionToken();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) =>
@@ -28,6 +30,7 @@ export function useConversationMutations(
       void queryClient.invalidateQueries({
         queryKey: conversationsKey(workspaceId),
       });
+      showToast("Chat deleted");
       onDeleted?.(id);
     },
   });

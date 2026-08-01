@@ -13,6 +13,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { useToast } from "@/components/ui/toast";
 import { useSessionToken } from "@/hooks/useSessionToken";
 import { api } from "@/lib/api";
 import { WORKSPACES_KEY } from "@/lib/queryKeys";
@@ -20,6 +21,7 @@ import { WORKSPACES_KEY } from "@/lib/queryKeys";
 export function useWorkspaceMutations(onDeleted?: (id: string) => void) {
   const getToken = useSessionToken();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   const renameMutation = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) =>
@@ -33,6 +35,7 @@ export function useWorkspaceMutations(onDeleted?: (id: string) => void) {
     mutationFn: async (id: string) => api.deleteWorkspace(id, await getToken()),
     onSuccess: (_data, id) => {
       void queryClient.invalidateQueries({ queryKey: WORKSPACES_KEY });
+      showToast("Workspace deleted");
       onDeleted?.(id);
     },
   });

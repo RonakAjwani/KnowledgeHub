@@ -14,6 +14,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
+import { ToastProvider } from "@/components/ui/toast";
 import { CLERK_ENABLED } from "@/lib/utils";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -36,7 +37,11 @@ export function Providers({ children }: { children: ReactNode }) {
       }),
   );
 
-  const tree = <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  const tree = (
+    <QueryClientProvider client={queryClient}>
+      <ToastProvider>{children}</ToastProvider>
+    </QueryClientProvider>
+  );
 
   return CLERK_ENABLED ? <ClerkProvider>{tree}</ClerkProvider> : tree;
 }

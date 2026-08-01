@@ -189,31 +189,28 @@ function WorkspaceCard({
       {confirmingDelete && (
         <div
           onClick={(event) => event.stopPropagation()}
-          className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm dark:border-red-900 dark:bg-red-950/30"
+          className="mt-4 flex items-center gap-1.5 rounded-lg bg-red-50 py-1.5 pl-3 pr-1.5 dark:bg-red-950/30"
         >
-          <p className="text-red-800 dark:text-red-200">
-            Delete this workspace and its {workspace.document_count}{" "}
-            {workspace.document_count === 1 ? "document" : "documents"}?
-          </p>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmingDelete(false);
-                onDelete();
-              }}
-              className="rounded-md bg-red-600 px-2.5 py-1.5 text-sm font-medium text-white hover:bg-red-700"
-            >
-              Delete
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmingDelete(false)}
-              className="rounded-md px-2.5 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-            >
-              Cancel
-            </button>
-          </div>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-red-800 dark:text-red-200">
+            Delete this workspace?
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setConfirmingDelete(false);
+              onDelete();
+            }}
+            className="shrink-0 rounded-md px-2.5 py-1 text-sm font-semibold text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/50"
+          >
+            Delete
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(false)}
+            className="shrink-0 rounded-md px-2.5 py-1 text-sm text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          >
+            Cancel
+          </button>
         </div>
       )}
     </div>

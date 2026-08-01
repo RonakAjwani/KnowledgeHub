@@ -34,7 +34,10 @@ export default clerkEnabled
 export const config = {
   matcher: [
     // Skip Next internals and static files unless referenced in a search param.
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    // `mp4`/`webm` cover the AuthShell walkthrough clip in public/media -
+    // missing them here sent that request through auth.protect() instead of
+    // straight to the static file, which 404'd it for every signed-out visitor.
+    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|mp4|webm)).*)",
     "/(api|trpc)(.*)",
   ],
 };

@@ -12,6 +12,7 @@ import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { Logo } from "@/components/ui/logo";
 import { CLERK_ENABLED } from "@/lib/utils";
 
 export default async function LandingPage() {
@@ -22,7 +23,8 @@ export default async function LandingPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
-      <header className="px-6 py-5">
+      <header className="flex items-center gap-2 px-6 py-5">
+        <Logo className="size-5 shrink-0 text-zinc-900 dark:text-zinc-100" />
         <span className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
           KnowledgeHub
         </span>
