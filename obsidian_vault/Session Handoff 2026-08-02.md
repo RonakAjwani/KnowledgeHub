@@ -1629,4 +1629,81 @@ First move if it happens: `az containerapp update --max-replicas 1` (seconds,
 reversible). The durable fix is a Postgres advisory lock so the cap is global,
 which is only worth writing if this stops being a demo.
 
+## Deployed - and verified against the real Clerk path
+
+Pushed `2eca37c` to `origin/main` (49 files, +4,590/-220). Vercel auto-built the
+frontend; the backend went to Azure as image tag `2eca37c`, revision
+`knowledgehub-backend--0000003`, 100% traffic. Startup reads
+`env=azure auth_mode=clerk provider=anthropic rrf_max=0.033333` - the `rrf_max`
+matching the value probed against Qdrant Cloud earlier the same day.
+
+**`az acr build` does not work on this subscription** - `TasksOperationsNotAllowed`.
+ACR Tasks are not permitted for registry `knowledgehubrag` under subscription
+`8fe4a493-…`, which is presumably why the previous deploy was also built locally.
+The working path is `docker build --platform linux/amd64 --provenance=false`,
+`az acr login --name knowledgehubrag`, `docker push`, then
+`az containerapp update --image`. Do not waste a session rediscovering this.
+
+**No migration in that commit**, checked before committing - so the entrypoint's
+`alembic upgrade head` was a no-op, which removed the main class of deploy risk
+up front. Confirmed in the revision logs: the migration context opens and
+nothing applies.
+
+### The Clerk path is no longer unverified
+
+[[Deployment Setup Checklist]] has always carried "this is the one flow never
+exercised against real credentials". **It has now been exercised, and it works.**
+No credentials were shared: Clerk development instances accept the fixed code
+`424242` for any address carrying the `+clerk_test` subaddress and deliver no
+mail (verified against Clerk's testing docs - the vault had no entry, so it was
+read rather than remembered).
+
+The instance reports `email_address.used_for_first_factor=True` with
+`verifications=['email_code']`, but **the sign-up form collects a password and
+sign-in uses it** - the environment payload does not tell you that on its own.
+Sign-in then hit a *second* factor, "You're signing in from a new device", which
+is where the test address earns its keep: `424242` cleared it with no inbox.
+
+**Turnstile gates sign-up, not sign-in.** `captcha_enabled: true` with the
+`smart` widget escalated to an interactive "Verify you are human" challenge for
+a headless browser on `/sign-up`. Probing `/sign-in` with a non-existent address
+returned a clean "Couldn't find your account." and no challenge. So automated
+verification of the deployed app is possible, but **the account has to be
+created by hand once**; after that a saved `storage_state` signs straight in.
+
+### Measured in production, all clean
+
+* **Bug 1's auth race, against a genuine Clerk-issued token for the first time** -
+  `GET /workspaces` returned 200 on first load, and **zero backend 4xx/5xx across
+  the entire session**. The "tested in dev mode only" caveat on that fix can go.
+* **Bug 6's refuse path renders live** - "Write me a poem about the sea." returned
+  *"That is outside what I can help with here…"* in the browser. This is the fix
+  that could only be confirmed inside the image at deploy time.
+* **Grounded answer with three verified (green) citation chips**, and a Sources
+  footer listing only the cited document.
+* **The citation highlight is visibly correct**: the source pane opened the
+  Markdown at §4.4 Rate Limits with the cited span lit, ending at a sentence
+  boundary rather than mid-word, and covering the whole passage rather than the
+  first 180 characters. Both halves of the Stage-4/5 highlight fix, in production.
+* **Follow-up coreference resolved**, and notably did not hallucinate: asked
+  "What about the Enterprise plan?" against a corpus with no separate Enterprise
+  limit, it said so explicitly instead of inventing one.
+* Zero console errors throughout.
+
+Test data removed afterwards - `DELETE /workspaces/{id}` returned 204 and the
+account has no workspaces left.
+
+**The credential is burned. Rotate or delete it before reusing this account.**
+The password was typed into an assistant session, so it has to be treated as
+disclosed regardless of what was cleaned up afterwards - the local copies
+(automation scripts and the saved `storage_state` session token) were deleted,
+but a transcript cannot be unwritten. Either delete the Clerk user
+`knowledgehub+clerk_test@example.com` from the dashboard, or reset its password
+before signing in with it again.
+
+**The method is still worth reusing, and needs no lasting secret.** Next time,
+set the password immediately before the run and reset it immediately after; the
+`+clerk_test` address needs no inbox and the `424242` code is public by design,
+so the password is the only part that ever needs protecting.
+
 [[KnowledgeHub Index]] · [[Pipeline Review Log]] · [[Session Handoff 2026-07-31]] · [[Technology Documentation Links]]
