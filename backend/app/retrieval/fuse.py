@@ -70,28 +70,75 @@ def fuse_formulations(
         # ceiling built for two, and every downstream threshold would shift.
         return list(non_empty[0][:limit])
 
+    # Rank orders; score measures. Keeping the two apart is the whole trick here,
+    # and collapsing them was a real bug (finding 7.1, fixed 2026-08-02).
+    #
+    # Reciprocal rank is the right basis for *ordering* - two separate Qdrant
+    # calls produce comparable ranks and incomparable raw scores, which is this
+    # function's docstring and it still holds. It is the wrong basis for a
+    # *magnitude*, because a rank says nothing about how well anything matched:
+    # the top chunk is rank 0 by definition, so a rank-derived score hands it 1.0
+    # whatever it is. Writing that number into `fused_score` fed it straight to
+    # `relevance_score`, which is what G2's abstention floor is compared against.
+    #
+    # MEASURED before the fix, varying only how well the chunk actually matched:
+    #
+    #     match quality                     at boundary   after fusion   relevance
+    #     excellent (top of one branch)          0.5000         1.0000      0.9967
+    #     terrible  (rank 39, last of top_k)     0.3030         1.0000      0.9967
+    #
+    # It reached production traffic through the CRAG retry, which is what makes
+    # it worse than it first looks. `retry_node` sets `rewritten = True`, so the
+    # corrective attempt always lands here - and the corrective attempt is, by
+    # construction, the path every question the corpus cannot answer takes.
+    # Measured end to end on an unanswerable question: attempt 0 scored 0.4543
+    # against a floor of 0.5 and correctly asked for a retry; the retry re-ran
+    # the identical query, fused the identical result set with itself, and scored
+    # 0.9085 - exactly double, since two identical contributions over a ceiling
+    # built for two leaves `k / (k + rank)`. It then answered from chunks about
+    # railway signalling. The `abstain` terminal was unreachable.
+    #
+    # That is `config.py`'s own documented I7 failure mode ("forces
+    # max(score) == 1.0 ... makes the abstention gate meaningless") reached by a
+    # different route: I7 was defended against observed-max normalisation, and
+    # rank-only recomputation was not.
+    #
+    # So: sort by reciprocal rank, and carry the magnitude across from the
+    # incoming scores. Every score arriving here was already divided by the
+    # analytic `RRF_MAX` at the retrieval boundary, so scores from different
+    # formulations are on one scale and directly comparable - no renormalisation
+    # happens here, and none may (I7). The **best** occurrence wins, matching the
+    # best-rank rule above: a chunk one formulation found strongly is not marked
+    # down because the other missed it.
     scores: dict[str, float] = {}
+    magnitude: dict[str, float] = {}
     best: dict[str, RetrievedChunk] = {}
 
     for result_set in non_empty:
         for rank, candidate in enumerate(result_set):
             chunk_id = candidate.chunk.id
             scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (k + rank + rank_base)
+            magnitude[chunk_id] = max(
+                magnitude.get(chunk_id, 0.0), candidate.fused_score
+            )
 
             # Keep the richer record: whichever occurrence carries branch ranks,
             # since `is_decisive` needs them and only one formulation may have
-            # surfaced the chunk in both branches.
+            # surfaced the chunk in both branches. Deliberately independent of
+            # the magnitude above - the occurrence with the ranks is not
+            # necessarily the occurrence with the better score.
             existing = best.get(chunk_id)
             if existing is None or _rank_signal(candidate) > _rank_signal(existing):
                 best[chunk_id] = candidate
 
+    # Normalised for interpretability only; dividing by a positive constant
+    # cannot reorder anything.
     ceiling = nested_rrf_max(k, rank_base, len(non_empty))
-    merged = [
-        best[chunk_id].model_copy(update={"fused_score": score / ceiling})
-        for chunk_id, score in scores.items()
+    order = sorted(scores, key=lambda cid: scores[cid] / ceiling, reverse=True)
+    return [
+        best[chunk_id].model_copy(update={"fused_score": magnitude[chunk_id]})
+        for chunk_id in order[:limit]
     ]
-    merged.sort(key=lambda c: c.fused_score, reverse=True)
-    return merged[:limit]
 
 
 def interleave_intents(

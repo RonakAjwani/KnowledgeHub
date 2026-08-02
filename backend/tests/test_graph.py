@@ -16,6 +16,8 @@ from app.graph.nodes import (
     Deps,
     _rewrite_failure_reason,
     applicable_floor,
+    build_generate_messages,
+    context_trim_degradation,
     fit_context,
     grade_node,
     relevance_score,
@@ -496,6 +498,79 @@ async def test_coverage_counts_factual_claims_only() -> None:
     )
 
 
+async def test_the_judge_is_asked_again_rather_than_served_from_cache() -> None:
+    """MEASURED, and the reason this test exists: the judge diverged once on a
+    table-shaped source and the prompt cache replayed that single wrong `false`
+    for the rest of the process. Two `verify()` calls on the same answer made
+    one HTTP call and returned `false` twice; the verdict only became `true`
+    after a restart cleared the cache. That is what made a one-sample
+    divergence look like a flaky judge.
+
+    The cache keys on (model, messages, temperature, max_tokens), every one of
+    which is identical on a re-ask, so nothing downstream can tell a cached
+    verdict from a fresh one. `StubLLM` bypasses the cache entirely, so only an
+    assertion on the flag itself can catch a caller that starts caching
+    judgements again."""
+    seen: list[dict] = []
+
+    class Recording(StubLLM):
+        async def complete_json(self, messages, **kw):
+            seen.append(kw)
+            return {"reason": "the row matches", "supported": True}
+
+    await Verifier(Recording()).verify(
+        "Revenue grew 40% [1].", {1: "Revenue grew 40 percent."}
+    )
+
+    assert seen, "the judge should have been called"
+    assert seen[0].get("use_cache") is False, (
+        "a judgement is not a deterministic transform - caching one turns a "
+        "single bad sample into a permanent wrong verdict"
+    )
+
+
+async def test_a_truncated_judge_response_is_unknown_not_unsupported() -> None:
+    """I2 under the token cap. The prompt now asks for reasoning *before* the
+    verdict, so a response cut off at `max_tokens` loses `supported` rather
+    than the explanation. `parse_json_tolerant` needs a balanced JSON span and
+    never salvages a bare `false` out of the reason text, so the cap can cost a
+    verdict but can never invent an unsupported one."""
+
+    class Truncating(StubLLM):
+        async def complete_json(self, messages, **kw):
+            # What a cut-off reason-first response actually parses to: the
+            # reason survived, the verdict never got emitted.
+            return {"reason": "the Team row shows 99.9% uptime and the claim"}
+
+    outcome = await Verifier(Truncating()).verify(
+        "The Team plan has 99.9% uptime [1].", {1: "| Team | 99.9% |"}
+    )
+    assert outcome.verdicts[1] is None
+    assert outcome.any_unsupported is False
+
+
+def test_verify_prompt_asks_for_reason_before_the_verdict() -> None:
+    """MEASURED against the live judge on a markdown table: asked for
+    {"supported", "reason"} in that order, it stated in its own reason that
+    the table's Team row showed 99.9% uptime and then returned `supported:
+    false` anyway - the verdict token committed before the reasoning that
+    contradicted it. Reordering the schema to {"reason", "supported"} made the
+    model work out the row/column match first and get 3/3 trials right on the
+    same source. A prompt edit that silently drops back to verdict-first would
+    reintroduce that failure with no test catching it, since `StubLLM` returns
+    a fixed dict regardless of prompt content."""
+    schema_pos = prompts.VERIFY_SYSTEM.index('"reason"')
+    verdict_pos = prompts.VERIFY_SYSTEM.index('"supported"')
+    assert schema_pos < verdict_pos, (
+        "the JSON schema must list reason before supported, so the model "
+        "writes its reasoning before committing to a verdict"
+    )
+    assert "table" in prompts.VERIFY_SYSTEM.lower(), (
+        "the prompt must call out tabular sources specifically - this is the "
+        "source shape the reordering fix was measured against"
+    )
+
+
 # ------------------------------------------------------------- graph shape
 
 
@@ -701,3 +776,120 @@ def test_trimming_keeps_the_highest_ranked_chunks() -> None:
     ]
     kept, _ = fit_context(candidates, Settings(max_context_tokens=5000))
     assert [c.chunk.id for c in kept] == [c.chunk.id for c in candidates[: len(kept)]]
+
+
+def test_a_context_trimmed_to_fit_the_budget_says_so() -> None:
+    """I1. `fit_context` returns a drop count precisely so the caller can raise a
+    degradation - its docstring says as much - and `build_generate_messages`
+    discarded it with `candidates, _ =`. A context shortened to fit the token
+    budget was therefore invisible: fewer passages reached the model, the answer
+    got correspondingly thinner, and nothing anywhere said so.
+
+    MEASURED: it never fires on a corpus of short sections (12 chunks of the
+    demo corpus total 1,465 tokens against a 4,000 budget) and fires hard on one
+    of long sections, where 12 parents near the 1,200-token cap exceed the
+    budget three times over. So this is invisible on our corpus and routine on a
+    contract, a 10-Q or any long-form report - which is the corpus a reviewer
+    brings."""
+    big = "word " * 3000  # a parent near the ceiling
+    candidates = [candidate(i, fused=1.0 - i * 0.01, text=big) for i in range(12)]
+    st = state(candidates=candidates, effective_queries=["a", "b", "c"])
+
+    messages, chunk_ids, dropped = build_generate_messages(st)
+
+    assert dropped > 0, "this fixture must actually exceed the budget"
+    assert len(chunk_ids) + dropped == 12
+    degradation = context_trim_degradation(dropped, len(chunk_ids))
+    assert degradation.reason is DegradationReason.CAP_REACHED
+    assert str(dropped) in degradation.detail
+    assert degradation.fallback == f"{len(chunk_ids)} of 12 passages"
+
+
+def test_a_context_that_fits_records_nothing() -> None:
+    """The counterpart: no degradation when nothing was dropped, so the record
+    stays meaningful rather than appearing on every turn."""
+    candidates = [candidate(i, fused=1.0 - i * 0.01, text="short body") for i in range(5)]
+    st = state(candidates=candidates)
+
+    _messages, chunk_ids, dropped = build_generate_messages(st)
+
+    assert dropped == 0
+    assert len(chunk_ids) == 5
+
+
+async def test_the_verify_judge_is_never_served_from_the_prompt_cache() -> None:
+    """Re-verification of a fix applied earlier today, because the point of this
+    review is not to trust that a fix stayed fixed.
+
+    Every temperature-0 call in this system is cached, and a judgement is not a
+    deterministic transform - the model can differ between two identical asks,
+    and that difference is the signal rather than noise. Caching it froze one
+    divergent `false` for the whole process: two `verify()` calls on the same
+    answer made one HTTP call and returned the same verdict twice, and only a
+    restart cleared it. That is what made a one-sample divergence look like a
+    flaky judge and cost a session to chase.
+
+    `StubLLM` bypasses the cache entirely, so only asserting on the flag itself
+    catches a caller that starts caching judgements again."""
+    seen: list[dict] = []
+
+    class Recording(StubLLM):
+        async def complete_json(self, messages, **kw):
+            seen.append(kw)
+            return {"reason": "the row matches", "supported": True}
+
+    await Verifier(Recording()).verify(
+        "The Team plan carries a 99.9% uptime commitment [1].",
+        {1: "The Team plan carries a 99.9% uptime commitment."},
+    )
+
+    assert seen, "the judge should have been called"
+    assert seen[0].get("use_cache") is False, (
+        "caching a judgement turns one bad sample into a permanent wrong verdict"
+    )
+
+
+def test_earlier_turns_are_capped_before_they_reach_a_prompt() -> None:
+    """The turn *count* was capped (4 for route, 6 for rewrite); the text of each
+    turn was not, and an assistant answer has no length limit.
+
+    MEASURED with five turns of realistic answers: the rewrite prompt reached
+    **17,778 characters (~4,714 tokens)** and route ~3,146 - to resolve one
+    pronoun and to classify one short message into one of four words. Both costs
+    are paid per turn, both grow with the conversation, and neither had a
+    ceiling, so a long chat quietly became expensive and then hit a context
+    limit. After the cap: 526 and 354 tokens, bounded whatever the history."""
+    long_answer = "The Team plan carries a 99.9% uptime commitment. " * 120
+    turns = []
+    for i in range(5):
+        turns.append({"role": "user", "content": f"question {i}"})
+        turns.append({"role": "assistant", "content": long_answer})
+
+    route = prompts.build_route_messages("follow up?", turns)
+    rewrite = prompts.build_rewrite_messages("follow up?", turns, {})
+
+    assert len(long_answer) > 5000, "the fixture must actually be long"
+    # Four/six replayed turns, each capped, plus framing - not the raw transcript.
+    assert len(route) < 3000, f"route prompt still unbounded: {len(route)} chars"
+    assert len(rewrite) < 4000, f"rewrite prompt still unbounded: {len(rewrite)} chars"
+    assert "[...]" in route and "[...]" in rewrite, "truncation must be visible"
+
+    # The user's own turns are short and must survive intact - they carry the
+    # referent a follow-up needs.
+    assert "question 4" in rewrite
+    # And the opening of the answer survives, which is where an entity is named.
+    assert "The Team plan carries a 99.9% uptime commitment." in rewrite
+
+
+def test_a_short_conversation_is_replayed_untouched() -> None:
+    """The cap must be invisible on ordinary turns, or it changes coreference
+    resolution for every conversation rather than only the long ones."""
+    turns = [
+        {"role": "user", "content": "What is the uptime SLA on the Team plan?"},
+        {"role": "assistant", "content": "The Team plan carries a 99.9% commitment."},
+    ]
+    rewrite = prompts.build_rewrite_messages("What about Enterprise?", turns, {})
+
+    assert "[...]" not in rewrite
+    for turn in turns:
+        assert turn["content"] in rewrite

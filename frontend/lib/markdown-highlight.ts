@@ -18,7 +18,7 @@
  * indication of which passage a citation had pointed at.
  */
 
-import { ANCHOR_CHARS, MIN_ANCHOR_CHARS, normalise } from "@/lib/text-match";
+import { MIN_ANCHOR_CHARS, anchorOf, normalise } from "@/lib/text-match";
 
 interface MdNode {
   type: string;
@@ -119,7 +119,7 @@ function applyHighlight(node: MdNode, pieces: Piece[], at: number, until: number
 export function remarkHighlightSnippet(cited: string | null) {
   return (tree: MdNode) => {
     if (!cited) return;
-    const target = normalise(cited).slice(0, ANCHOR_CHARS);
+    const target = anchorOf(cited);
     if (target.length < MIN_ANCHOR_CHARS) return;
 
     const textNodes: MdNode[] = [];
@@ -145,7 +145,37 @@ export function remarkHighlightSnippet(cited: string | null) {
 
     const at = haystack.indexOf(target);
     if (at < 0) return;
-    const until = at + target.length;
+
+    // The anchor is how the passage is *found*; it is not how much of it should
+    // be lit. Ending the highlight at `at + target.length` lit only the first
+    // 180 characters of a citation - a 272-character cited span showed roughly
+    // two thirds highlighted, stopping mid-word inside "limit", because 180 is
+    // a raw character count. Extend from the anchor through the rest of the
+    // cited text, one character at a time, for exactly as long as the rendering
+    // still agrees with it.
+    //
+    // Character-by-character rather than `at + full.length` so a passage that
+    // diverges from the rendering (a Markdown construct the parser dropped, a
+    // table cell reordered) stops at the divergence instead of lighting up
+    // whatever text happened to follow.
+    const full = normalise(cited);
+    let matched = target.length;
+    while (
+      matched < full.length &&
+      at + matched < haystack.length &&
+      haystack[at + matched] === full[matched]
+    ) {
+      matched += 1;
+    }
+
+    // If it stopped early it may have stopped mid-word; pull back to the last
+    // boundary so the highlight never severs one. Never below the anchor, which
+    // is already word-aligned and is the minimum that proves the match.
+    let until = at + matched;
+    if (matched < full.length) {
+      const lastSpace = haystack.lastIndexOf(" ", until);
+      if (lastSpace > at + target.length) until = lastSpace;
+    }
 
     applyHighlight(tree, pieces, at, until);
   };

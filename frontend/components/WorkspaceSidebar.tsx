@@ -52,7 +52,7 @@ import { SidebarToggleButton } from "@/components/SidebarToggleButton";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
 import { useToast } from "@/components/ui/toast";
-import { useSessionToken } from "@/hooks/useSessionToken";
+import { useSessionToken, useSessionTokenState } from "@/hooks/useSessionToken";
 import { useConversationMutations } from "@/hooks/useConversationMutations";
 import { useHasMounted } from "@/hooks/useHasMounted";
 import { usePinnedWorkspaces } from "@/hooks/usePinnedWorkspaces";
@@ -85,41 +85,68 @@ function describeError(error: unknown): string {
  * can't be undone" is dropped as boilerplate: every delete in this sidebar
  * is permanent, so the label already implies it without repeating it below.
  */
-function InlineDeleteConfirm({
+export function InlineDeleteConfirm({
   label,
   onConfirm,
   onCancel,
   className,
+  size = "xs",
 }: {
   label: string;
   onConfirm: () => void;
   onCancel: () => void;
   className?: string;
+  /** `sm` for the workspace grid's cards, `xs` for the sidebar's rows. */
+  size?: "xs" | "sm";
 }) {
+  const sm = size === "sm";
   return (
+    // Two rows, not one. The single-line version put the question and both
+    // buttons on the same line with `truncate` on the label - which fits
+    // nowhere it is actually used. A sidebar row and a workspace card are both
+    // ~250-300px wide, and "Delete this workspace?" plus two buttons needs
+    // ~330px, so the label truncated to "Delete t..." and the control read as
+    // broken. Wrapping the label onto its own line costs one line of height
+    // and is the only layout that holds at these widths without a container
+    // query. `line-clamp-2` bounds it, so a very long workspace name cannot
+    // grow the row without limit either.
     <div
       className={cn(
-        "mt-1 flex items-center gap-1.5 rounded-md bg-red-50 py-1 pl-2 pr-1 dark:bg-red-950/30",
+        "mt-1 rounded-md bg-red-50 dark:bg-red-950/30",
+        sm ? "rounded-lg px-3 py-2" : "px-2 py-1.5",
         className,
       )}
     >
-      <span className="min-w-0 flex-1 truncate text-xs font-medium text-red-800 dark:text-red-200">
+      <p
+        className={cn(
+          "line-clamp-2 font-medium break-words text-red-800 dark:text-red-200",
+          sm ? "text-sm" : "text-xs",
+        )}
+      >
         {label}
-      </span>
-      <button
-        type="button"
-        onClick={onConfirm}
-        className="shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/50"
-      >
-        Delete
-      </button>
-      <button
-        type="button"
-        onClick={onCancel}
-        className="shrink-0 rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-800"
-      >
-        Cancel
-      </button>
+      </p>
+      <div className={cn("flex items-center justify-end gap-1", sm ? "mt-1.5" : "mt-1")}>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className={cn(
+            "shrink-0 rounded font-semibold text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/50",
+            sm ? "rounded-md px-2.5 py-1 text-sm" : "px-1.5 py-0.5 text-xs",
+          )}
+        >
+          Delete
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className={cn(
+            "shrink-0 rounded text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-800",
+            sm ? "rounded-md px-2.5 py-1 text-sm" : "px-1.5 py-0.5 text-xs",
+          )}
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
@@ -286,6 +313,24 @@ export function NewWorkspaceDialog({
   const busy = submitMutation.isPending;
   const canSubmit = name.trim().length > 0 && !busy;
 
+  // Bounded by construction, and that is the point. This label used to read
+  // `Uploading ${uploadingName}...`, which put an arbitrary-length filename
+  // inside a `whitespace-nowrap shrink-0` button: a real 66-character
+  // factsheet name grew the submit button to 714px inside a 576px dialog,
+  // and because the footer is `justify-end` the overflow went left - Cancel
+  // was rendered 274px outside the dialog, floating over the page behind it.
+  // The filename was redundant anyway: the file list right above already
+  // spins on the row being uploaded, so a counter says the one thing the
+  // list cannot ("how many are left") in a fixed number of characters.
+  const uploadIndex = uploadingName
+    ? files.findIndex((file) => file.name === uploadingName) + 1
+    : 0;
+  const submitLabel = !busy
+    ? "Create workspace"
+    : uploadIndex > 0
+      ? `Uploading ${uploadIndex} of ${files.length}...`
+      : "Creating...";
+
   return (
     <div
       // True-black scrim via an explicit rgba, NOT `bg-black/40`:
@@ -450,13 +495,15 @@ export function NewWorkspaceDialog({
             size="md"
             disabled={!canSubmit}
             onClick={() => submitMutation.mutate()}
+            // `min-w-0` overrides the base `shrink-0`'s effect on this one
+            // instance so a label that somehow still outgrows the row
+            // truncates instead of pushing Cancel out. The label below is
+            // already bounded; this is the guard that makes the row safe
+            // regardless of what any future label says.
+            className="min-w-0 shrink"
           >
-            {busy && <LoaderCircle className="size-3.5 animate-spin" />}
-            {busy
-              ? uploadingName
-                ? `Uploading ${uploadingName}...`
-                : "Creating..."
-              : "Create workspace"}
+            {busy && <LoaderCircle className="size-3.5 shrink-0 animate-spin" />}
+            <span className="truncate">{submitLabel}</span>
           </Button>
         </div>
       </div>
@@ -735,7 +782,7 @@ function WorkspaceRow({
 // ------------------------------------------------------------------- sidebar
 
 export function WorkspaceSidebar({ className }: { className?: string }) {
-  const getToken = useSessionToken();
+  const { getToken, isLoaded, isSignedIn } = useSessionTokenState();
   const router = useRouter();
   const pathname = usePathname();
   const params = useParams<{ workspaceId?: string }>();
@@ -762,6 +809,12 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
   const workspacesQuery = useQuery({
     queryKey: WORKSPACES_KEY,
     queryFn: async () => api.listWorkspaces(await getToken()),
+    // Firing before Clerk has hydrated a session gets a token the backend
+    // rejects as expired - a race, not a real expiry. Waiting for `isLoaded`
+    // (and a signed-in session) means this fetches once, with a real token,
+    // instead of failing immediately on mount and needing the 401 retry to
+    // paper over it.
+    enabled: isLoaded && isSignedIn,
   });
 
   const { pinned, toggle: togglePin } = usePinnedWorkspaces();
@@ -772,7 +825,11 @@ export function WorkspaceSidebar({ className }: { className?: string }) {
   // the fix for the"isLoading differs between SSR and hydration"mismatch,
   // not a cosmetic workaround.
   const hasMounted = useHasMounted();
-  const showLoading = !hasMounted || workspacesQuery.isLoading;
+  // `isPending`, not `isLoading`: a query held off by `enabled: isLoaded &&
+  // isSignedIn` never starts fetching, so `isLoading` (`isPending &&
+  // isFetching`) would read `false` while still waiting on Clerk and this
+  // would flash the empty state before the first real fetch even starts.
+  const showLoading = !hasMounted || workspacesQuery.isPending;
 
   const workspaces = workspacesQuery.data ?? [];
   const filteredWorkspaces = useMemo(() => {

@@ -356,6 +356,77 @@ def test_the_recovered_table_is_an_atomic_table_block() -> None:
     assert "Manufacturing PMI" in " ".join(b.text for b in tables)
 
 
+def make_feature_grid_pdf() -> bytes:
+    """A plan-comparison grid with no ruling lines and no "Table N" caption -
+    the shape a product pricing PDF actually ships, as opposed to the ruled or
+    captioned-borderless tables the other fixtures cover.
+
+    Cells are mostly short words ("Unlimited", "None"), not digits, so this is
+    also the case the purely-numeric column-anchor recovery cannot reach on
+    its own and the caption-gated rescue never triggers on.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 720, "Meridian offers four plans: Free, Starter, Team, and Enterprise.")
+
+    c.setFont("Helvetica", 10)
+    c.drawString(72, 690, "Feature Free Starter Team Enterprise")
+
+    rows = [
+        ("Workspace members", ["Up to 5", "Up to 15", "Up to 100", "Unlimited"]),
+        ("Boards per Workspace", ["3", "Unlimited", "Unlimited", "Unlimited"]),
+        ("Uptime commitment", ["None", "99.5%", "99.9%", "99.95%"]),
+    ]
+    columns = [220, 300, 380, 460]
+    y = 670
+    for label, values in rows:
+        c.drawString(72, y, label)
+        for x, value in zip(columns, values, strict=True):
+            c.drawString(x, y, value)
+        y -= 20
+
+    c.setFont("Helvetica", 11)
+    c.drawString(
+        72,
+        y - 20,
+        "To restate the table above in plain terms: the Team plan commits to 99.9% uptime.",
+    )
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def test_a_captionless_borderless_feature_grid_is_recovered_as_a_table() -> None:
+    """MEASURED on a SaaS pricing PDF: this table's cells are mostly words, not
+    digits, so it had too few numeric cells per row to seed a column anchor via
+    the generic recovery, and it carries no "Table N" caption to trigger the
+    ruling-free rescue - the row flattened into reflowed prose with the header
+    and values reordered off their own row."""
+    result = parse_document(make_feature_grid_pdf(), "application/pdf")
+
+    tables = [b for b in result.blocks if b.block_type is BlockType.TABLE]
+    assert tables, "the feature grid should be recovered as a table block"
+
+    text = " ".join(b.text for b in tables)
+    row = next(line for line in text.splitlines() if "Uptime" in line or "99.9%" in line)
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    assert "99.9%" in cells, f"Team's uptime value must survive in its own cell, got {cells}"
+
+
+def test_the_prose_paragraph_below_a_feature_grid_is_not_swallowed_into_it() -> None:
+    """The rescue is scoped to the header-to-last-aligned-row span. Running the
+    text-strategy detector over the whole page (the fix tried first) pulled the
+    restating paragraph below the table into the same "table" block, corrupting
+    both."""
+    result = parse_document(make_feature_grid_pdf(), "application/pdf")
+
+    prose = [b for b in result.blocks if b.block_type is BlockType.PROSE]
+    assert any(
+        "restate the table" in b.text and "99.9%" in b.text for b in prose
+    ), "the restatement paragraph must stay intact prose, not get absorbed into the table"
+
+
 def test_a_pipe_in_cell_text_does_not_add_a_column() -> None:
     """An unescaped pipe ends its cell early, so every value after it shifts one
     column left - the same corruption a collapsed blank cell causes, arriving by

@@ -151,7 +151,7 @@ class TurnRunner:
         if route in (Route.HISTORY, Route.REFUSE):
             node = nodes.history_node if route == Route.HISTORY else nodes.refuse_node
             state.update(cast(Any, await node(state, self.deps)))
-            async for frame in self._emit_answer(state, message_id, []):
+            async for frame in self._emit_unstreamed_answer(state, message_id):
                 yield frame
             return
 
@@ -257,7 +257,13 @@ class TurnRunner:
         self, state: QueryState, message_id: str
     ) -> AsyncIterator[str]:
         settings = get_settings()
-        messages, chunk_ids = nodes.build_generate_messages(state)
+        messages, chunk_ids, dropped = nodes.build_generate_messages(state)
+        if dropped:
+            # I1: a context shortened to fit the token budget is a quality change
+            # the reader would otherwise have no way to see.
+            trimmed = nodes.context_trim_degradation(dropped, len(chunk_ids))
+            state["degradations"] = [*state.get("degradations", []), trimmed]
+            yield self.stream.frame("degradation", trimmed.model_dump(mode="json"))
         # Derived from what the prompt actually contained, rather than recomputed
         # from the same inputs. Two independent computations agreed only for as
         # long as nothing else trimmed the context - the token budget now can,
@@ -313,9 +319,17 @@ class TurnRunner:
             # the citation list is re-derived from the *new* chunk_ids below
             # rather than kept from the first attempt: a citation list built from
             # a prompt the model never saw would point [n] at the wrong chunk.
-            messages, chunk_ids = nodes.build_generate_messages(
+            messages, chunk_ids, dropped = nodes.build_generate_messages(
                 state, context_tokens=settings.max_context_tokens_fallback
             )
+            if dropped:
+                # The fallback budget is half the primary's, so this path drops
+                # more often than the first build did - and the reader is
+                # already on a degraded answer, which is exactly when a second,
+                # compounding degradation most needs saying out loud.
+                trimmed = nodes.context_trim_degradation(dropped, len(chunk_ids))
+                state["degradations"] = [*state.get("degradations", []), trimmed]
+                yield self.stream.frame("degradation", trimmed.model_dump(mode="json"))
             top = [by_id[cid] for cid in chunk_ids if cid in by_id]
 
             try:
@@ -374,6 +388,40 @@ class TurnRunner:
                 )
             )
         return citations
+
+    async def _emit_unstreamed_answer(
+        self, state: QueryState, message_id: str
+    ) -> AsyncIterator[str]:
+        """Put a terminal node's one-piece answer on the wire.
+
+        ``refuse`` and ``history`` produce their answer whole rather than as a
+        token stream, and §8 gives the answer text exactly one transport:
+        ``answer.delta``. ``answer.complete`` carries ``{message_id, citations}``
+        and no text, so emitting it alone persisted a real answer while the
+        client - which builds its answer string solely by concatenating deltas -
+        rendered an empty bubble. ``history`` was the costly half: it spends an
+        LLM call on a genuine answer that the reader never saw.
+
+        Sent as a single delta inside the ``generate`` bracket rather than beside
+        it, so §8's "``answer.delta`` appears only after
+        ``pipeline.stage{generate, started}``" holds verbatim and the client needs
+        no special case. The stage is named for the job - producing the answer -
+        not for the node; ``route``'s own detail already tells the UI which
+        terminal it was.
+        """
+        attempt = state.get("attempt", 0)
+        yield self.stream.frame(
+            "pipeline.stage",
+            {"node": "generate", "state": "started", "attempt": attempt},
+        )
+        answer = state.get("answer", "")
+        if answer:
+            yield self.stream.frame("answer.delta", {"text": answer})
+        yield self.stream.frame(
+            "pipeline.stage", {"node": "generate", "state": "done", "attempt": attempt}
+        )
+        async for frame in self._emit_answer(state, message_id, []):
+            yield frame
 
     async def _emit_answer(
         self, state: QueryState, message_id: str, citations: list[Citation]
@@ -437,6 +485,7 @@ async def run_verification(
     session: AsyncSession,
     deps: Deps,
     *,
+    user_id: str,
     message_id: str,
     answer: str,
     citations: list[Citation],
@@ -447,6 +496,13 @@ async def run_verification(
     Runs after the answer has streamed, so its latency is never charged to the
     user. Persisting matters as much as emitting: a client that disconnected
     early still sees the verdicts via ``GET /messages/{id}``.
+
+    ``user_id`` is here for I3. Both statements below used to key on
+    ``message_id`` and the row id alone, which is safe only because the caller
+    derives ``message_id`` from that user's own turn - exactly the "scoping by
+    remembering" the invariant exists to replace. ``message_citations`` carries
+    a ``user_id`` column; not using it left a write path that a future caller
+    could reach with someone else's id and never be corrected by a test.
     """
     verifier = Verifier(deps.llm)
     try:
@@ -456,7 +512,10 @@ async def run_verification(
         return {}
 
     rows = await session.execute(
-        select(db.MessageCitation).where(db.MessageCitation.message_id == message_id)
+        select(db.MessageCitation).where(
+            db.MessageCitation.message_id == message_id,
+            db.MessageCitation.user_id == user_id,
+        )
     )
     for row in rows.scalars().all():
         verdict = result.verdicts.get(row.marker)
@@ -464,7 +523,10 @@ async def run_verification(
             continue  # I2 - leave NULL rather than writing a guess
         await session.execute(
             update(db.MessageCitation)
-            .where(db.MessageCitation.id == row.id)
+            .where(
+                db.MessageCitation.id == row.id,
+                db.MessageCitation.user_id == user_id,
+            )
             .values(verified=verdict)
         )
     await session.commit()

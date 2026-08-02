@@ -24,31 +24,42 @@ export const metadata: Metadata = {
 // first. Both live in one script (one blocking `<script>` tag, not two) since
 // there's nothing to gain from splitting a two-line IIFE in half.
 //
-// Dark is the default for an unset/invalid preference (the reference this
-// design follows is dark throughout, and a first-time visitor should land on
-// the theme the app is actually designed around rather than whatever their OS
-// happens to prefer) - "system" is a real, selectable third option once
-// someone opens Settings, just not what a visitor with nothing stored yet
-// gets defaulted into. `data-theme-pref` mirrors the resolved preference so
-// `useTheme` (see hooks/useTheme.ts) can tell "explicitly dark" apart from
-// "system, currently resolving dark" without a hydration mismatch.
+// **"system" is the default for an unset/invalid preference**, so a
+// first-time visitor - including on the landing and sign-in pages, which is
+// the first thing anyone sees - lands on whatever their OS asks for. This
+// used to default to dark on the reasoning that the design is dark-first and a
+// visitor should see the theme the app was built around; that was overridden
+// deliberately, because respecting the OS setting is what a visitor expects
+// and a light-mode user being handed a dark app reads as the app ignoring
+// them. Light and dark are both fully supported here, so there is nothing to
+// protect by forcing one. Dark remains selectable in Settings, and an explicit
+// choice still wins over the OS.
+//
+// The localStorage read is the only part that can throw (private browsing,
+// storage disabled), so only it is wrapped - resolving "system" must still
+// happen in that case rather than dropping the visitor into a hardcoded
+// fallback. `data-theme-pref` mirrors the preference so `useTheme` (see
+// hooks/useTheme.ts) can tell "explicitly dark" apart from "system, currently
+// resolving dark" without a hydration mismatch.
 const PREFERENCES_INIT_SCRIPT = `
 (function () {
+  var pref = "system";
+  var collapsed = false;
   try {
-    var pref = localStorage.getItem("kh-theme");
-    if (pref !== "light" && pref !== "dark" && pref !== "system") pref = "dark";
-    var isDark = pref === "system"
-      ? window.matchMedia("(prefers-color-scheme: dark)").matches
-      : pref === "dark";
-    document.documentElement.setAttribute("data-theme-pref", pref);
-    if (isDark) document.documentElement.classList.add("dark");
-    if (localStorage.getItem("kh-sidebar-collapsed") === "true") {
-      document.documentElement.classList.add("sidebar-collapsed");
-    }
-  } catch (e) {
-    document.documentElement.setAttribute("data-theme-pref", "dark");
-    document.documentElement.classList.add("dark");
+    var stored = localStorage.getItem("kh-theme");
+    if (stored === "light" || stored === "dark" || stored === "system") pref = stored;
+    collapsed = localStorage.getItem("kh-sidebar-collapsed") === "true";
+  } catch (e) {}
+
+  var isDark = pref === "dark";
+  if (pref === "system") {
+    try {
+      isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    } catch (e) {}
   }
+  document.documentElement.setAttribute("data-theme-pref", pref);
+  if (isDark) document.documentElement.classList.add("dark");
+  if (collapsed) document.documentElement.classList.add("sidebar-collapsed");
 })();
 `;
 

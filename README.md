@@ -8,7 +8,7 @@ Built solo, end to end: architecture, retrieval pipeline, ingest, frontend, eval
 
 - **Stack:** FastAPI + Next.js, Qdrant, Postgres, LangGraph
 - **Retrieval:** hybrid dense + sparse, fused server-side with weighted RRF, conditional Cohere rerank
-- **Tests:** 393 passing (327 backend, 66 frontend), all in CI
+- **Tests:** 464 passing (377 backend, 87 frontend), all in CI
 - **Run it:** `docker compose up --build`, no accounts needed
 
 ## Contents
@@ -281,12 +281,12 @@ different bugs.
 paths that matter. I went further only where a bug produces a plausible wrong answer rather
 than an error.
 
-**375 tests. No API keys needed. All run in CI.**
+**464 tests. No API keys needed. All run in CI.**
 
 | Suite | Count | Covers |
 |---|---|---|
-| Backend (`pytest`) | 309 | The offset property (every chunk span round-trips through `normalized_text`), RRF arithmetic, guardrail gating on both reranked and un-reranked paths, citation marker normalisation, idempotent re-ingest, the full error taxonomy, SSE frame ordering. Ten integration tests run against real Postgres and Qdrant. |
-| Frontend (`vitest`) | 66 | The hand-rolled SSE parser, the chat-turn reducer, the REST error envelope, the citation chip's three verification states. |
+| Backend (`pytest`) | 377 | The offset property (every chunk span round-trips through `normalized_text`), RRF arithmetic, guardrail gating on both reranked and un-reranked paths, citation marker normalisation, idempotent re-ingest, the full error taxonomy, SSE frame ordering. Ten integration tests run against real Postgres and Qdrant. |
+| Frontend (`vitest`) | 87 | The hand-rolled SSE parser, the chat-turn reducer, the REST error envelope, the citation chip's three verification states, citation-marker extraction, and the highlight's word-boundary and code-point offset handling. |
 
 ```bash
 # Backend

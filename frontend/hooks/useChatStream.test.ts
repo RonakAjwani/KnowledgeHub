@@ -519,6 +519,49 @@ describe("failures outside the stream", () => {
     expect(streamChatMock).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({ kind: "cancelled" });
   });
+
+  it("retries once on a 401 and succeeds, rather than failing the turn", async () => {
+    // A token grabbed right as Clerk finishes loading, or one that went stale
+    // while the tab sat idle, looks identical to the backend: a 401. One
+    // retry re-fetches the token instead of surfacing a false "session
+    // expired" error for what is really just a mount-time race.
+    streamChatMock
+      .mockImplementationOnce(async function* () {
+        throw new StreamHttpError(401, "unauthenticated", "Token expired", "req-1");
+      })
+      .mockImplementationOnce(async function* () {
+        yield turnStart();
+        yield delta("Hello");
+        yield answerComplete();
+      });
+
+    const { result } = renderHook(() => useChatStream());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+
+    expect(streamChatMock).toHaveBeenCalledTimes(2);
+    expect(result.current.phase).toBe("answered");
+    expect(result.current.answer).toBe("Hello");
+  });
+
+  it("surfaces a failed turn when the 401 repeats, rather than retrying forever", async () => {
+    streamChatMock.mockImplementation(async function* () {
+      throw new StreamHttpError(401, "unauthenticated", "Token expired", "req-2");
+    });
+
+    const { result } = renderHook(() => useChatStream());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+
+    expect(streamChatMock).toHaveBeenCalledTimes(2);
+    expect(result.current.phase).toBe("errored");
+    expect(result.current.error).toMatchObject({
+      code: "unauthenticated",
+      requestId: "req-2",
+    });
+  });
 });
 
 describe("forward compatibility", () => {

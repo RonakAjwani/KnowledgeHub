@@ -129,6 +129,26 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 2
 
+    # How many documents may be in ingest at once, process-wide.
+    #
+    # MEASURED, and the reason this is 1: ingest runs in the API process, and
+    # each in-flight document costs one pooled connection held for the whole
+    # run. Uploading six documents into one workspace exhausted the pool
+    # outright - `QueuePool limit of size 5 overflow 2 reached, connection
+    # timed out, timeout 30.00` - and every unrelated request (the sidebar's
+    # workspace list, any chat turn) hung 30 s and then 500'd behind it. The
+    # 512 MB ceiling says the same thing from the memory side: two 100-page
+    # PDFs parsing at once is the likeliest way to OOM the process.
+    #
+    # This is deliberately a *process* limit, not a per-workspace one. The
+    # binding constraints - RAM and the connection pool - are per process, and
+    # a per-workspace lock leaves N workspaces free to run N ingests. It is
+    # also, for the same reason, not a distributed lock: two Container Apps
+    # replicas each get their own semaphore, which is why the deadlock
+    # defences in `_mirror_chunks` (ordered key acquisition) and
+    # `_commit_chunk_batch` (retry on 40P01) do not lean on this.
+    ingest_max_concurrency: int = 1
+
     # ------------------------------------------------------------------- LLM
     # Swapping providers is a config change, never a code change.
     #

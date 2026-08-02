@@ -25,7 +25,7 @@ from app.ingest.parse import (
     parse_markdown,
     parse_plain_text,
 )
-from app.ingest.tokens import count_tokens
+from app.ingest.tokens import _heuristic_token_count, count_tokens
 from app.models.schemas import Block, BlockType
 
 # Token counting uses the deterministic heuristic here rather than downloading
@@ -78,6 +78,96 @@ def test_unsupported_mime_is_rejected() -> None:
 def test_markdown_dispatches_by_mime() -> None:
     result = parse_document(b"# Title\n\nBody.", "text/markdown")
     assert result.blocks[0].text == "Title"
+
+
+# ------------------------------------------------------------- upload decoding
+
+# Every character here is representable in latin-1, cp1252 and both Unicode
+# families, so one fixture can be round-tripped through all of them. The em dash
+# and curly quotes get their own test below - latin-1 genuinely has no em dash,
+# so asserting it here would be testing the fixture rather than the code.
+ACCENTED = "Café revenue rose 8% in Zürich; the naïve forecast was £2m."
+
+
+@pytest.mark.parametrize(
+    "encoding", ["utf-8", "utf-8-sig", "utf-16", "utf-32", "cp1252", "latin-1"]
+)
+def test_a_text_upload_survives_whatever_encoding_it_arrived_in(encoding: str) -> None:
+    """MEASURED, and this is not an exotic case: decoding was
+    `data.decode("utf-8")` with `errors="replace"` behind it, so **non-ASCII
+    content was destroyed in every non-UTF-8 encoding**. "Café" became
+    "Caf\\ufffd" under cp1252, latin-1 and UTF-16 alike.
+
+    cp1252 is simply what a text file saved out of a Windows editor is, and it
+    is where curly quotes, em dashes, £/€ and every accented name live - so a
+    document copy-pasted out of Word lost a character at every smart quote,
+    ingested "successfully", and nothing anywhere reported it.
+
+    Pure ASCII hid this completely: the interleaved NULs of a UTF-16 file are
+    stripped later as control characters, which repairs ASCII by accident. Only
+    a non-ASCII fixture exposes it, which is why the demo corpus never did."""
+    result = parse_document(ACCENTED.encode(encoding), "text/plain")
+    assert " ".join(b.text for b in result.blocks) == ACCENTED
+
+
+def test_the_word_processor_punctuation_that_cp1252_carries_survives() -> None:
+    """The realistic version of this bug. Curly quotes, em dashes and £/€ are
+    exactly the characters a document pasted out of Word carries, they are
+    cp1252 bytes that are invalid UTF-8, and each one used to become
+    `\\ufffd`."""
+    text = "The “Team” plan — see §4 — costs £29/month."
+    result = parse_document(text.encode("cp1252"), "text/plain")
+    assert " ".join(b.text for b in result.blocks) == text
+
+
+@pytest.mark.parametrize("bom_encoding", ["utf-8-sig", "utf-16", "utf-32"])
+def test_a_bom_is_consumed_not_left_in_the_text(bom_encoding: str) -> None:
+    """A byte-order mark is the writer's own declaration, so it is honoured
+    before anything is guessed - and it must be *consumed*, not decoded into the
+    text.
+
+    Caught by this test during the fix: the endian-specific codecs
+    (`utf-16-le`) decode correctly but leave the mark as a stray `\\ufeff`.
+    `sanitize_text` strips it, but only after `parse_markdown` has already
+    failed to match `^(#{1,6})` against `\\ufeff# Title` - losing the first
+    heading and shifting every section path beneath it. Hence the BOM-aware
+    codecs, and hence a markdown fixture rather than a plain-text one."""
+    result = parse_document("# Title\n\nBody text.".encode(bom_encoding), "text/markdown")
+    assert result.blocks[0].text == "Title"
+    assert result.blocks[0].section == "Title"
+
+
+def test_bomless_utf16_is_a_known_limit_not_a_silent_success() -> None:
+    """Documented boundary. BOM-less UTF-16 is genuinely ambiguous with latin-1
+    at the byte level and is not guessed at - guessing would risk mis-decoding
+    valid latin-1. Its ASCII content still survives, because the interleaved
+    NULs are stripped downstream as control characters."""
+    ascii_text = "Revenue reached 8M in Q3."
+    result = parse_document(ascii_text.encode("utf-16-le"), "text/plain")
+    doc = build_normalized_text(result.blocks)
+    assert doc.text == ascii_text
+
+
+@pytest.mark.parametrize(
+    ("data", "mime"),
+    [
+        (b"", "text/plain"),
+        (b"   \n\n \t \n", "text/plain"),
+        (b"", "text/markdown"),
+    ],
+)
+def test_an_empty_text_upload_is_rejected_not_silently_indexed(
+    data: bytes, mime: str
+) -> None:
+    """`parse_pdf` already refused a document it could extract no text from; the
+    text path had no such check, so an empty or whitespace-only upload parsed to
+    zero blocks, ingested to `ready` with zero chunks, and sat in the document
+    list looking searchable while matching nothing.
+
+    That is the silent partial index `parse_document`'s own docstring rules out,
+    reached by the one file type that was not guarded."""
+    with pytest.raises(UnsupportedDocument, match="No readable text"):
+        parse_document(data, mime)
 
 
 # --------------------------------------------------------- cross-references
@@ -152,6 +242,73 @@ def test_no_captions_means_no_references() -> None:
     assert resolve_cross_references(doc) == {}
 
 
+# ------------------------------------------------------------- token counting
+
+
+def test_the_token_counter_does_not_collapse_an_unbroken_run() -> None:
+    """The opposite failure to saturation, and reached by ordinary content.
+
+    MEASURED: WordPiece's `max_input_chars_per_word` is 100, and any longer
+    unbroken run becomes a single `[UNK]` - 100 "A"s tokenize to 52 tokens, 110
+    to **3**, and 9,000 also to 3. So the count stops responding to length
+    entirely.
+
+    A base64 data URI - an image embedded in a markdown file - measured 4,422
+    characters at 13 tokens. That passes every chunk and parent ceiling
+    untouched, becomes one chunk whose dense vector is the embedding of
+    `[UNK]`, and reaches the model in a parent roughly 85x the budget it was
+    admitted under. Long URLs, minified code, hex digests and any PDF whose
+    word-boundary recovery failed all share the shape.
+
+    The windowed re-count cannot catch this: that guards a count saturating
+    *at* the cap, and this under-reports instead."""
+    assert count_tokens("A" * 110) > 3, "an [UNK]-collapsed run must not report ~3"
+
+    # Responds to length rather than flattening.
+    assert count_tokens("A" * 9000) > count_tokens("A" * 1000) > count_tokens("A" * 110)
+
+    # The realistic trigger.
+    blob = "data:image/png;base64," + "iVBORw0KGgoAAAANSUhEUg" * 200
+    assert count_tokens(blob) > CFG.child_tokens, (
+        "a base64 data URI must be large enough to be split, not admitted whole"
+    )
+
+    # And the floor is inert on ordinary text - a document of normal words must
+    # count by its tokenizer, not by the character floor.
+    prose = "Sentence body here. " * 200
+    assert count_tokens(prose) > len(prose) // 8
+
+
+def test_the_context_budget_heuristic_also_resists_the_collapse() -> None:
+    """`fit_context` counts with the deterministic heuristic rather than a
+    tokenizer, and it scored a 9,000-character unbroken run at **1** token - so
+    the budget that exists to keep a request under the serving model's limit was
+    blind to exactly the input most able to blow it."""
+    assert _heuristic_token_count("A" * 9000) > 1000
+
+
+def test_the_token_counter_does_not_saturate_at_the_model_limit() -> None:
+    """MEASURED: `bge-small-en-v1.5`'s tokenizer ships with truncation on at
+    512, and `token_count` reports the length *after* truncation - so a
+    320,000-character string and a 3,200-character one both came back 512.
+
+    That is the ruler every chunk and parent ceiling is enforced with, which
+    made those ceilings unenforceable in exactly the range where they matter.
+    Nothing else can catch a regression here: the chunker keeps producing
+    plausible output, it just stops respecting its own limits, and every
+    assertion written in terms of `count_tokens` agrees with it."""
+    unit = "indemnification "
+    small = count_tokens(unit * 200)
+    large = count_tokens(unit * 5000)
+    huge = count_tokens(unit * 20000)
+
+    assert small > 0
+    assert large > small, "counting must keep rising past the model's input limit"
+    assert huge > large, f"saturated: {large} == {huge}"
+    # Monotonic and roughly proportional - 25x the text is not 1.0x the count.
+    assert huge > large * 3
+
+
 # ------------------------------------------------------------------ chunking
 
 
@@ -193,6 +350,83 @@ def test_parent_always_contains_its_child() -> None:
     ]
     doc, chunks = _chunks_for(blocks)
     for chunk in chunks:
+        assert chunk.parent_char_start <= chunk.char_start
+        assert chunk.parent_char_end >= chunk.char_end
+        assert chunk.parent_text == doc.text[
+            chunk.parent_char_start : chunk.parent_char_end
+        ]
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        # No sentence terminators at all - what OCR and many PDF extractions
+        # produce, and what a requirements or changelog list looks like.
+        (
+            "unpunctuated",
+            " ".join(f"clause {i} the operator shall retain records" for i in range(400)),
+        ),
+        # Non-Latin sentence punctuation: the splitter keys on . ! ? only, so 。
+        # is not a boundary and the whole block is one "sentence".
+        ("cjk", "".join(f"这是第{i}个句子，包含足够多的内容来填充一个区块。" for i in range(150))),
+        # One unbroken run with no whitespace to snap to.
+        ("no whitespace", "A" * 12000),
+    ],
+)
+def test_no_chunk_exceeds_what_the_embedding_model_will_read(name: str, text: str) -> None:
+    """MEASURED: `bge-small-en-v1.5` accepts 512 tokens and fastembed truncates
+    silently past that. Unpunctuated prose produced a 1,057-token child and CJK
+    produced 2,906 - so the dense vector described the opening of the chunk and
+    the rest was unreachable by the dense branch, while BM25 still indexed all of
+    it. Nothing raised, nothing logged; it is a pure recall hole.
+
+    Neither splitter could catch this: both divide on a natural boundary
+    (sentence, table row) and neither can divide a unit already over the
+    ceiling. Only a corpus without `.!?` exposes it, which is why a demo corpus
+    of ordinary English prose never would."""
+    doc, chunks = _chunks_for([Block(text=text, section="S")])
+
+    assert chunks, f"{name}: expected chunks"
+    for chunk in chunks:
+        assert count_tokens(chunk.text) <= 512, (
+            f"{name}: chunk is {count_tokens(chunk.text)} tokens; the embedder "
+            "will silently truncate it"
+        )
+        # The hard split must not break I5 - offsets still slice back out.
+        assert chunk.text.endswith(doc.text[chunk.char_start : chunk.char_end])
+
+
+def test_a_block_bigger_than_the_parent_ceiling_still_yields_a_bounded_parent() -> None:
+    """MEASURED, and invisible on a short corpus: the parent window started at
+    the child's whole *block*, so a block over the ceiling made every parent in
+    it the entire block. On a 54 KB single-section document 41 of 42 parents
+    breached the 1200-token cap and the largest was ~10,400 tokens - 8.7x. The
+    parent is the string the model receives, so `fit_context` then trimmed the
+    turn to roughly one source instead of five.
+
+    A section only has to exceed the ceiling for this to bite, which is to say
+    it bites on real documents (a contract, a 10-Q, a policy) and on none of the
+    short fixtures the rest of this file uses."""
+    one_long_block = [
+        Block(
+            text=" ".join(
+                f"Clause {i} states that the operator shall maintain records "
+                f"for the prescribed period and produce them on request."
+                for i in range(300)
+            ),
+            section="S",
+        )
+    ]
+    doc, chunks = _chunks_for(one_long_block)
+
+    assert len(chunks) > 5, "the block should have split into many children"
+    for chunk in chunks:
+        parent_tokens = count_tokens(chunk.parent_text)
+        assert parent_tokens <= CFG.parent_tokens, (
+            f"parent is {parent_tokens} tokens against a "
+            f"{CFG.parent_tokens} ceiling"
+        )
+        # Still contains its child and still slices back out (I5).
         assert chunk.parent_char_start <= chunk.char_start
         assert chunk.parent_char_end >= chunk.char_end
         assert chunk.parent_text == doc.text[

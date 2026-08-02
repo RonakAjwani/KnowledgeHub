@@ -34,7 +34,7 @@ import {
   HIGHLIGHT_NODE_TAG,
   remarkHighlightSnippet,
 } from "@/lib/markdown-highlight";
-import { ANCHOR_CHARS, MIN_ANCHOR_CHARS, normalise } from "@/lib/text-match";
+import { MIN_ANCHOR_CHARS, anchorOf, normalise } from "@/lib/text-match";
 
 interface Rect {
   left: number;
@@ -66,7 +66,7 @@ function locate(
   items: { str: string; transform: number[]; width: number; height: number }[],
   needle: string,
 ): Rect[] {
-  const target = normalise(needle).slice(0, ANCHOR_CHARS);
+  const target = anchorOf(needle);
   if (target.length < MIN_ANCHOR_CHARS) return [];
 
   const spans: { start: number; end: number; item: (typeof items)[number] }[] =

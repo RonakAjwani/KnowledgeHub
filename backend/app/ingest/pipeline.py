@@ -150,12 +150,28 @@ class IngestPipeline:
         )
 
     async def _embed_and_upsert(
-        self, chunks: list[Chunk], doc_id: str, session: AsyncSession
+        self, chunks: list[Chunk], doc_id: str, user_id: str, session: AsyncSession
     ) -> None:
         """Embed in batches, then write Qdrant first and Postgres second."""
         await self.publish(
             doc_id, DocumentStatus.EMBEDDING, {"done": 0, "total": len(chunks), "unit": "chunks"}
         )
+
+        # Clear any rows a previous run of this document left behind, once,
+        # before the first batch. `_mirror_chunks` upserts on the primary key,
+        # but `chunks` carries a *second* unique constraint - uq_chunks_doc_index
+        # on (doc_id, chunk_index) - which ON CONFLICT (id) does not arbitrate.
+        # A re-ingest whose text changed for a given index (Tier-2 escalation is
+        # not bit-identical between runs) mints a new id for the same
+        # (doc_id, chunk_index) and lands on that constraint as a raw
+        # IntegrityError, which is the opposite of the idempotency
+        # `_mirror_chunks` exists to provide.
+        await session.execute(
+            sql_delete(db.Chunk).where(
+                db.Chunk.doc_id == doc_id, db.Chunk.user_id == user_id
+            )
+        )
+        await session.commit()
 
         batch_size = self.settings.embed_batch_size
         for start in range(0, len(chunks), batch_size):
@@ -167,15 +183,21 @@ class IngestPipeline:
             embeddings = await asyncio.to_thread(self.embedder.embed_documents, texts)
 
             await self.store.upsert_chunks(batch, embeddings)
-            await _mirror_chunks(session, batch)
+            # Committed per batch rather than accumulated into one transaction
+            # spanning the whole embed loop. Two reasons, both about lock
+            # windows: a transaction open for the length of a 200-page ingest
+            # holds its row locks (and a pooled connection) that entire time,
+            # and a deadlock victim cannot be retried cheaply if retrying means
+            # re-embedding every batch. Retrieval never sees these rows early -
+            # `load_ready_doc_ids` scopes to `status == ready`, which is not set
+            # until the last batch lands.
+            await _commit_chunk_batch(session, batch)
 
             await self.publish(
                 doc_id,
                 DocumentStatus.EMBEDDING,
                 {"done": start + len(batch), "total": len(chunks), "unit": "chunks"},
             )
-
-        await session.flush()
 
     # ------------------------------------------------------------- entrypoint
 
@@ -200,7 +222,7 @@ class IngestPipeline:
                 data, mime, document_id
             )
             chunks = await self._chunk(doc, document_id, user_id)
-            await self._embed_and_upsert(chunks, document_id, session)
+            await self._embed_and_upsert(chunks, document_id, user_id, session)
 
             await _update_document(
                 session,
@@ -242,6 +264,18 @@ class IngestPipeline:
             await self.store.delete_document(user_id, document_id)
         except Exception:  # noqa: BLE001
             logger.warning("could not clean up vectors for failed doc %s", document_id)
+
+        # And the Postgres side of the same partial index. `rollback()` used to
+        # be enough because the whole embed loop shared one transaction; now
+        # that batches commit as they land, the rows from every batch before
+        # the failure are already durable. Leaving them would strand chunk rows
+        # whose vectors were just deleted - the orphan this pipeline's write
+        # ordering exists to prevent, arriving from the failure path instead.
+        await session.execute(
+            sql_delete(db.Chunk).where(
+                db.Chunk.doc_id == document_id, db.Chunk.user_id == user_id
+            )
+        )
 
         await _update_document(
             session, document_id, status=DocumentStatus.FAILED, error=reason
@@ -329,6 +363,18 @@ async def _mirror_chunks(session: AsyncSession, chunks: list[Chunk]) -> None:
     if not chunks:
         return
 
+    # Sorted by id, and that is a deadlock defence, not tidiness. Postgres
+    # takes its row locks in the order the VALUES list gives them, so two
+    # transactions whose key sets overlap can acquire the same two rows in
+    # opposite orders and close a wait cycle - the classic circular wait, and
+    # the one shape that produces "process A waits for ShareLock on
+    # transaction B; blocked by process C" on this exact statement. Insert
+    # order was previously chunk_index order, which is arbitrary with respect
+    # to id (a sha256 digest). A single global order makes the cycle
+    # unconstructible, and unlike serialising ingest in-process it still holds
+    # when two Container Apps replicas write at once.
+    ordered = sorted(chunks, key=lambda c: c.id)
+
     rows = [
         {
             "id": chunk.id,
@@ -348,7 +394,7 @@ async def _mirror_chunks(session: AsyncSession, chunks: list[Chunk]) -> None:
             "is_derived": chunk.is_derived,
             "related_spans": [list(span) for span in chunk.related_spans],
         }
-        for chunk in chunks
+        for chunk in ordered
     ]
 
     statement = pg_insert(db.Chunk).values(rows)
@@ -362,6 +408,58 @@ async def _mirror_chunks(session: AsyncSession, chunks: list[Chunk]) -> None:
             },
         )
     )
+
+
+def _is_deadlock(exc: BaseException) -> bool:
+    """True for Postgres SQLSTATE 40P01 (deadlock_detected).
+
+    Read off ``sqlstate`` rather than by exception class: asyncpg raises
+    ``DeadlockDetectedError``, psycopg raises its own, and SQLAlchemy's asyncpg
+    adapter translates neither into a named class - the deadlock arrives as a
+    bare ``DBAPIError``, not the ``IntegrityError`` a constraint violation
+    would produce. The code is the one stable identifier across all three.
+    """
+    for err in (exc, getattr(exc, "orig", None)):
+        if err is None:
+            continue
+        code = getattr(err, "sqlstate", None) or getattr(err, "pgcode", None)
+        if code == "40P01":
+            return True
+    return False
+
+
+async def _commit_chunk_batch(session: AsyncSession, batch: list[Chunk]) -> None:
+    """Mirror one batch and commit it, retrying once if Postgres picks us as
+    the deadlock victim.
+
+    A deadlock abort is transient by construction - Postgres has already broken
+    the cycle by killing one side, so the survivor commits and the victim's
+    re-run finds no contention. Retrying is therefore the *correct* response,
+    not a papering-over, and it is the only defence that keeps working when the
+    contending writer is in another process (a second replica) or another code
+    path (`IngestPipeline.delete` takes a row-exclusive lock on the same
+    `documents` row this INSERT holds a FOR KEY SHARE on through the chunks
+    foreign key). Retried exactly once: a second deadlock on a statement with
+    no remaining contender is not a race, and re-running forever would just
+    move the failure from visible to invisible.
+
+    Safe to retry because the statement is an idempotent upsert on
+    deterministic ids - re-running it writes the same rows to the same keys.
+    """
+    for attempt in (0, 1):
+        try:
+            await _mirror_chunks(session, batch)
+            await session.commit()
+            return
+        except Exception as exc:  # noqa: BLE001
+            await session.rollback()
+            if attempt == 1 or not _is_deadlock(exc):
+                raise
+            logger.warning(
+                "deadlock mirroring %d chunks for doc %s; retrying once",
+                len(batch),
+                batch[0].doc_id if batch else "?",
+            )
 
 
 async def _update_document(

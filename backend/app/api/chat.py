@@ -38,7 +38,7 @@ from app.graph.nodes import Deps
 from app.graph.state import initial_state
 from app.llm.client import LLMError, Message, get_llm_client
 from app.memory.conversation import load_memory, update_memory
-from app.models.schemas import Citation
+from app.models.schemas import Citation, DocumentStatus
 from app.retrieval.hydrate import (
     hydrate_candidates,
     load_filenames,
@@ -91,11 +91,28 @@ async def chat(
         # Scope to the workspace's own documents rather than every document the
         # user has ever uploaded - the whole point of a workspace is that a chat
         # inside it only ever searches what was put there.
+        #
+        # `user_id` is here for I3, which asks that scoping hold by construction
+        # rather than because the caller happened to validate ownership upstream.
+        #
+        # `status == ready` matters more than it looks. Qdrant is written before
+        # Postgres, so a document mid-ingest already has partial vectors; what
+        # used to hide them was that its Postgres chunk rows were uncommitted,
+        # so hydration dropped them. Committing each embed batch (a fix applied
+        # earlier today, to keep lock windows short) removed that accident, and
+        # this predicate restores the guarantee deliberately: an answer is never
+        # composed from a document that is still being indexed, which is the
+        # "partial index" the ingest pipeline calls its worst available outcome.
         doc_rows = await session.execute(
             select(db.Document.id).where(
-                db.Document.workspace_id == conversation.workspace_id
+                db.Document.workspace_id == conversation.workspace_id,
+                db.Document.user_id == user_id,
+                db.Document.status == str(DocumentStatus.READY),
             )
         )
+        # May legitimately be empty - a new or still-ingesting workspace. That
+        # now means "search nothing" rather than "search everything": `_scope`
+        # distinguishes `[]` from `None`.
         selected_doc_ids = [row[0] for row in doc_rows.all()]
     memory = await load_memory(
         session, conversation_id=conversation.id, user_id=user_id
@@ -171,6 +188,7 @@ async def chat(
             payload = await run_verification(
                 session,
                 deps,
+                user_id=user_id,
                 message_id=message.id,
                 answer=answer,
                 citations=citations,

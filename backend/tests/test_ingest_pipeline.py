@@ -10,18 +10,28 @@ Bring the services up with:  docker compose up -d postgres qdrant
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import event, func, select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.workspaces import list_workspaces
 from app.config import Settings
 from app.db import models as db
 from app.ingest.embed import Embedder
-from app.ingest.pipeline import IngestPipeline, content_sha256, find_existing_document
-from app.models.schemas import DocumentStatus
+from app.ingest.pipeline import (
+    IngestPipeline,
+    _commit_chunk_batch,
+    _mirror_chunks,
+    content_sha256,
+    find_existing_document,
+)
+from app.models.schemas import Chunk, DocumentStatus, chunk_id
 from app.retrieval.qdrant_store import QdrantStore
 
 DB_URL = "postgresql+asyncpg://knowledgehub:knowledgehub@localhost:5432/knowledgehub"
@@ -356,6 +366,245 @@ async def test_unparseable_document_fails_loudly_and_leaves_nothing_behind(
     assert doc.status == "failed"
     assert doc.error
     assert await store.count(user) == 0
+
+
+# ------------------------------------------------------- concurrent ingest
+
+
+async def test_two_documents_ingest_concurrently_without_deadlocking(
+    settings, store, session, document
+) -> None:
+    """Two ingests running at once against real Postgres, each in its own
+    session - the shape "upload two large PDFs into one workspace" produces.
+
+    Reported as a Postgres deadlock on the chunk upsert. Measured here so the
+    claim is testable rather than remembered: chunk ids are
+    sha256(doc_id|chunk_index|text) and the second unique key is
+    (doc_id, chunk_index), so two *different* documents share no row and no
+    cycle is available to them. What this guards is the write path staying
+    that way - a chunk id that stopped including doc_id, or a shared row
+    introduced into the loop, would make the reported deadlock real.
+    """
+    engine = create_async_engine(settings.database_url)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    user = f"u-{uuid.uuid4().hex[:8]}"
+    doc_a = await document(user, CORPUS + b"\nAlpha segment.\n", "a.md")
+    doc_b = await document(user, CORPUS + b"\nBeta segment.\n", "b.md")
+
+    async def run(doc_id: str, data: bytes):
+        pipeline = IngestPipeline(
+            store=store, embedder=Embedder(settings), settings=settings
+        )
+        async with maker() as own_session:
+            return await pipeline.ingest(
+                own_session,
+                document_id=doc_id,
+                user_id=user,
+                data=data,
+                mime="text/markdown",
+            )
+
+    try:
+        results = await asyncio.gather(
+            run(doc_a.id, CORPUS + b"\nAlpha segment.\n"),
+            run(doc_b.id, CORPUS + b"\nBeta segment.\n"),
+        )
+    finally:
+        await engine.dispose()
+
+    assert [r.status for r in results] == [DocumentStatus.READY, DocumentStatus.READY]
+    assert all(r.chunk_count > 0 for r in results)
+
+
+async def test_chunk_rows_are_written_in_id_order(session, document) -> None:
+    """The circular-wait defence, and the only test that can catch its loss.
+
+    Postgres locks rows in the order the VALUES list presents them, so two
+    writers whose key sets overlap deadlock if they present those keys in
+    opposite orders. Sorting by id gives every writer one global order, which
+    makes the cycle unconstructible - including across replicas, where the
+    in-process ingest semaphore does nothing. Nothing else fails if a refactor
+    drops the sort: the rows written are identical, and the deadlock it
+    prevents only appears under concurrency that no unit test reproduces.
+    """
+    captured: list[list[str]] = []
+
+    class Recorder:
+        async def execute(self, statement):
+            compiled = statement.compile()
+            ids = [
+                value
+                for key, value in compiled.params.items()
+                if key.startswith("id")
+            ]
+            captured.append(ids)
+
+    chunks = [
+        Chunk(
+            id=chunk_id("doc-1", i, f"body {i}"),
+            doc_id="doc-1",
+            user_id="u",
+            chunk_index=i,
+            text=f"body {i}",
+            char_start=i,
+            char_end=i + 1,
+            parent_text=f"body {i}",
+            parent_char_start=i,
+            parent_char_end=i + 1,
+        )
+        for i in range(12)
+    ]
+    # Deliberately not already sorted: chunk_index order is arbitrary with
+    # respect to a sha256 digest, which is exactly the starting condition.
+    assert [c.id for c in chunks] != sorted(c.id for c in chunks)
+
+    await _mirror_chunks(Recorder(), chunks)  # type: ignore[arg-type]
+
+    assert captured, "the upsert statement should have been executed"
+    assert captured[0] == sorted(captured[0])
+
+
+async def test_a_deadlocked_chunk_batch_is_retried_once_then_surfaces() -> None:
+    """Postgres breaks a deadlock by killing one side, so the victim's re-run
+    finds no contention - retrying is the correct response, not a paper-over.
+    Exactly once: a second deadlock is not a race, and retrying forever would
+    turn a visible failure into a hang."""
+    attempts = 0
+
+    class Deadlocking:
+        def __init__(self, fail_times: int) -> None:
+            self.fail_times = fail_times
+
+        async def execute(self, statement):
+            nonlocal attempts
+            attempts += 1
+            if attempts <= self.fail_times:
+                orig = Exception("deadlock detected")
+                orig.sqlstate = "40P01"  # type: ignore[attr-defined]
+                raise DBAPIError("INSERT INTO chunks", {}, orig)
+
+        async def commit(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            return None
+
+    batch = [
+        Chunk(
+            id=chunk_id("doc-1", 0, "body"),
+            doc_id="doc-1",
+            user_id="u",
+            chunk_index=0,
+            text="body",
+            char_start=0,
+            char_end=4,
+            parent_text="body",
+            parent_char_start=0,
+            parent_char_end=4,
+        )
+    ]
+
+    attempts = 0
+    await _commit_chunk_batch(Deadlocking(1), batch)  # type: ignore[arg-type]
+    assert attempts == 2, "one deadlock should cost exactly one retry"
+
+    attempts = 0
+    with pytest.raises(DBAPIError):
+        await _commit_chunk_batch(Deadlocking(2), batch)  # type: ignore[arg-type]
+    assert attempts == 2, "a second deadlock must surface, not retry again"
+
+
+async def test_a_non_deadlock_error_is_not_retried() -> None:
+    """Re-running a statement that failed on its merits just fails again, and
+    the same distinction §5 draws for connection errors applies here."""
+    attempts = 0
+
+    class Failing:
+        async def execute(self, statement):
+            nonlocal attempts
+            attempts += 1
+            orig = Exception("duplicate key")
+            orig.sqlstate = "23505"  # type: ignore[attr-defined]
+            raise DBAPIError("INSERT INTO chunks", {}, orig)
+
+        async def commit(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            return None
+
+    batch = [
+        Chunk(
+            id=chunk_id("doc-1", 0, "body"),
+            doc_id="doc-1",
+            user_id="u",
+            chunk_index=0,
+            text="body",
+            char_start=0,
+            char_end=4,
+            parent_text="body",
+            parent_char_start=0,
+            parent_char_end=4,
+        )
+    ]
+
+    with pytest.raises(DBAPIError):
+        await _commit_chunk_batch(Failing(), batch)  # type: ignore[arg-type]
+    assert attempts == 1
+
+
+# --------------------------------------------------------- workspace listing
+
+
+async def test_listing_workspaces_costs_the_same_queries_at_any_size(
+    settings, session
+) -> None:
+    """MEASURED: this endpoint used to issue 1 + 2N statements - 37 for 18
+    workspaces - because it looped and counted per row. Locally that is 51 ms
+    and invisible, which is exactly why it survived review; against Postgres
+    over a network it is 37 *sequential* round trips on the first screen after
+    sign-in, and it got slower the more the account was used.
+
+    Asserting on the statement count rather than on latency: the response body
+    is identical either way, and a local timing would pass at any N. Counting
+    statements at two sizes is the only thing that distinguishes "constant" from
+    "linear" without a network to measure over."""
+    engine = create_async_engine(settings.database_url)
+    statements: list[str] = []
+
+    @event.listens_for(engine.sync_engine, "before_cursor_execute")
+    def _record(conn, cursor, statement, params, context, executemany):
+        statements.append(statement)
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    user = f"u-{uuid.uuid4().hex[:8]}"
+    counts: dict[int, int] = {}
+    try:
+        async with maker() as own:
+            for size in (2, 9):
+                own.add_all(
+                    [db.Workspace(user_id=user, name=f"w{i}") for i in range(size)]
+                )
+                await own.commit()
+
+                statements.clear()
+                listed = await list_workspaces(user_id=user, session=own)
+                counts[size] = len(statements)
+                assert len(listed) == size
+
+                # Wipe so the next size is exact rather than cumulative.
+                await own.execute(
+                    sql_delete(db.Workspace).where(db.Workspace.user_id == user)
+                )
+                await own.commit()
+    finally:
+        await engine.dispose()
+
+    assert counts[2] == counts[9], (
+        f"query count must not grow with the number of workspaces, "
+        f"got {counts[2]} at 2 and {counts[9]} at 9"
+    )
+    assert counts[9] <= 3, f"expected the list plus two grouped counts, got {counts[9]}"
 
 
 # ------------------------------------------------------------- status events

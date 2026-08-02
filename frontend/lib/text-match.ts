@@ -55,3 +55,28 @@ export const ANCHOR_CHARS = 180;
 export function normalise(text: string): string {
   return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
+
+/**
+ * The passage's opening, cut at a word boundary, ready to search for.
+ *
+ * Both call sites used to do `normalise(needle).slice(0, ANCHOR_CHARS)`, and
+ * because the highlight covers exactly what the search matched, a raw
+ * character cut is a highlight that **ends mid-word** - reported from the
+ * deployed app, and it happens on essentially every citation long enough to
+ * reach the limit, since 180 characters lands inside a word far more often
+ * than between two. Trimming back to the last space costs a few characters of
+ * anchor and nothing else: the anchor exists to locate the passage, not to
+ * delimit it.
+ *
+ * A 180-character run containing no space at all - CJK, a long identifier, a
+ * base64 blob - has no boundary to trim to, so it is used raw. Cutting mid-run
+ * is the correct behaviour there; those scripts have no spaces to respect.
+ */
+export function anchorOf(text: string): string {
+  const normalised = normalise(text);
+  if (normalised.length <= ANCHOR_CHARS) return normalised;
+
+  const cut = normalised.slice(0, ANCHOR_CHARS);
+  const lastSpace = cut.lastIndexOf(" ");
+  return lastSpace >= MIN_ANCHOR_CHARS ? cut.slice(0, lastSpace) : cut;
+}

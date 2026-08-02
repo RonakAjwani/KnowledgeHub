@@ -517,11 +517,17 @@ class LLMClient:
         max_tokens: int = 1024,
         timeout: float = 30.0,
         list_key: str | None = None,
+        use_cache: bool = True,
     ) -> dict[str, Any]:
         """``complete`` plus a tolerant parse. Raises ``LLMError`` if unparseable.
 
         ``list_key`` is forwarded to :func:`parse_json_tolerant` for callers whose
         schema is a single named list.
+
+        ``use_cache`` is forwarded too. It existed on ``complete`` but stopped
+        here, which silently made every JSON-returning stage cacheable whether
+        or not that was right for it - see ``Verifier._judge``, where it was
+        not.
         """
         return parse_json_tolerant(
             await self.complete(
@@ -530,6 +536,7 @@ class LLMClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout=timeout,
+                use_cache=use_cache,
             ),
             list_key=list_key,
         )

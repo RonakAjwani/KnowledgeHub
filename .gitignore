@@ -51,6 +51,12 @@ pgdata/
 # Eval output
 evals/results/
 
+# Scratch corpus used to probe the pipeline during the 2026-08-02 review. Not
+# shipped - the reviewer brings their own documents, which is the point.
+# Deliberately named exactly rather than globbed: `document corpus/` is tracked
+# and is the demo set, so a loose `corpus*` pattern here would be a trap.
+new_corpus/
+
 # OS / editor
 .DS_Store
 Thumbs.db

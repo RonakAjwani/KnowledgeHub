@@ -61,6 +61,7 @@ import {
   CITATION_NODE_TAG,
   CURSOR_NODE_TAG,
   CURSOR_SENTINEL,
+  citedMarkers,
   remarkCitationMarkers,
 } from "@/lib/markdown-citations";
 import { conversationsKey } from "@/lib/queryKeys";
@@ -253,29 +254,41 @@ function AnswerBody({
 /**
  * The documents an answer actually drew from, deduplicated to one entry per
  * document - distinct from the inline `[n]` chips, which mark *where in the
- * prose* a claim came from. This is the"what did you search"summary shown
+ * prose* a claim came from. This is the"what did you cite"summary shown
  * once at the end, the reference's artifact card translated to this product's
  * own unit: not a generated file, a cited source. Clicking a card reuses the
  * same `onCitationClick` path as an inline chip, so it opens the exact cited
  * span, not just the document.
+ *
+ * `citations` is the retrieval trace - every DATA block that reached the
+ * prompt - so it is *not* the list to render directly: retrieval reaches into
+ * every document in the workspace, and a footer built from it listed all of
+ * them under a heading that claims they were used. Only the markers the answer
+ * actually cites survive, which is why `answer` is a prop. Dedupe runs after
+ * that filter and keeps the lowest surviving marker per document, so the card
+ * opens the first span the answer leaned on rather than an uncited one.
  */
 function SourcesFooter({
   citations,
+  answer,
   onCitationClick,
 }: {
   citations: Citation[];
+  answer: string;
   onCitationClick: (citation: Citation) => void;
 }) {
   const unique = useMemo(() => {
+    const cited = citedMarkers(answer);
     const seen = new Set<string>();
     const list: Citation[] = [];
     for (const citation of citations) {
+      if (!cited.has(citation.marker)) continue;
       if (seen.has(citation.doc_id)) continue;
       seen.add(citation.doc_id);
       list.push(citation);
     }
     return list;
-  }, [citations]);
+  }, [citations, answer]);
 
   if (unique.length === 0) return null;
 
@@ -588,6 +601,7 @@ function AssistantBubble({
 
       <SourcesFooter
         citations={turn.citations}
+        answer={turn.content}
         onCitationClick={onCitationClick}
       />
 
@@ -1160,6 +1174,7 @@ export function ChatPane({
                 {!isStreaming ? (
                   <SourcesFooter
                     citations={citations}
+                    answer={answer}
                     onCitationClick={onCitationClick}
                   />
                 ) : null}

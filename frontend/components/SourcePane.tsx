@@ -17,6 +17,7 @@ import {
 import { ApiError, api, triggerBrowserDownload } from "@/lib/api";
 import { DocumentView } from "@/components/DocumentView";
 import { fileKind } from "@/lib/fileKind";
+import { codePointLength, toCodeUnitOffsets } from "@/lib/offsets";
 import { CLERK_ENABLED, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -244,15 +245,33 @@ export function SourcePane({
 
   const text = documentQuery.data?.normalized_text ?? "";
 
-  const requestedStart = highlight?.char_start ?? null;
-  const requestedEnd = highlight?.char_end ?? null;
+  // Citation offsets are code point indices; a JavaScript string is indexed in
+  // UTF-16 code units. The two coincide until a document contains an astral
+  // character (an emoji, a mathematical alphanumeric, a rare CJK extension), at
+  // which point every offset after it is one unit short here and the highlight
+  // silently slides. Converted once, at the single point the offsets meet the
+  // string, so every use below - the range check, the clamp, the segment split
+  // and the `cited` slice - agrees. Identity for an all-BMP document.
+  const [requestedStart, requestedEnd] = useMemo(() => {
+    if (!highlight) return [null, null] as const;
+    const [start, end] = toCodeUnitOffsets(text, [
+      highlight.char_start,
+      highlight.char_end,
+    ]);
+    return [start, end] as const;
+  }, [text, highlight]);
 
-  /** Out of range means the citation belongs to a different build of this text. */
+  /** Out of range means the citation belongs to a different build of this text.
+   *
+   * Compared in code points, because that is the unit the offsets are in - and
+   * a code point count is always <= the code unit count, so comparing against
+   * `text.length` would let a genuinely out-of-range citation through on a
+   * document containing astral characters. */
   const highlightOutOfRange =
     highlight !== null &&
     text.length > 0 &&
     (highlight.char_start < 0 ||
-      highlight.char_end > text.length ||
+      highlight.char_end > codePointLength(text) ||
       highlight.char_end <= highlight.char_start);
 
   const segments = useMemo(() => {
@@ -507,8 +526,15 @@ export function SourcePane({
               text={text}
               page={highlight?.page ?? null}
               cited={
-                highlight && !highlightOutOfRange
-                  ? text.slice(highlight.char_start, highlight.char_end)
+                highlight &&
+                !highlightOutOfRange &&
+                requestedStart !== null &&
+                requestedEnd !== null
+                  ? // The converted offsets, not the raw ones - this string is
+                    // the needle `DocumentView` searches the PDF text layer and
+                    // the Markdown tree with, so slicing it one unit early
+                    // would shift the highlight in *both* other views too.
+                    text.slice(requestedStart, requestedEnd)
                   : null
               }
             />

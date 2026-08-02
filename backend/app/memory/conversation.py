@@ -88,6 +88,29 @@ async def load_memory(
     """Load the last N turns verbatim plus the summary of everything older."""
     cfg = settings or get_settings()
 
+    # -------------------------------------------------------------------
+    # KNOWN ISSUE, measured and deliberately deferred (2026-08-02).
+    #
+    # This orders by `created_at` with no tiebreak, and `created_at` is set
+    # Python-side by `_now()` rather than by the database. Wall-clock time is
+    # not monotonic: an NTP correction stepping a container's clock backwards
+    # between two turns puts the later turn first, and there is nothing
+    # monotonic to fall back on because message ids are uuid4.
+    #
+    # MEASURED with ten messages written at an identical timestamp: the
+    # conversation came back **completely reversed** - not perturbed, inverted -
+    # which would feed the model an answer before the question it answers and
+    # break coreference resolution outright.
+    #
+    # Why it is still here: an exact microsecond tie is effectively impossible
+    # in normal operation, since a user turn and its assistant reply are seconds
+    # apart, so the realistic trigger is a backward clock step rather than a
+    # tie - and a tiebreaker does not fix inversion. The correct fix is a
+    # monotonic ordering column, which is a schema migration; landing one days
+    # before a demo costs more than the risk it removes.
+    #
+    # Full write-up: obsidian_vault/Session Handoff 2026-08-02.md, finding 10.1.
+    # -------------------------------------------------------------------
     result = await session.execute(
         select(db.Message)
         .where(

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import UserId
@@ -50,6 +50,49 @@ async def _owned(session: AsyncSession, user_id: str, workspace_id: str) -> db.W
     if workspace is None or workspace.user_id != user_id:
         raise NotFound("No such workspace.")
     return workspace
+
+
+async def _counts_for_all(
+    session: AsyncSession, user_id: str
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Every workspace's counts, in two queries rather than two per workspace.
+
+    MEASURED, and the reason this exists: listing 18 workspaces issued **37**
+    statements - one for the list, then a document count and a conversation
+    count per row. Locally that is 51 ms and invisible. The deployment reaches
+    Postgres over a network, and 37 *sequential* round trips is ~0.9 s at a
+    25 ms RTT and ~2.2 s at 60 ms, on the first screen a user sees after
+    signing in. The cost also grew with the account: every workspace added two
+    more round trips, so the app got slower the more it was used.
+
+    Counting is also done by the database now. `_counts` below selects every
+    matching id and takes `len()` of the result in Python, which ships the
+    whole id set over the wire to discard it.
+
+    `user_id` is in both predicates for the reason `_counts` documents: I3
+    holds by construction rather than by the caller having checked ownership
+    first.
+    """
+    docs = await session.execute(
+        select(db.Document.workspace_id, func.count())
+        .where(
+            db.Document.user_id == user_id,
+            db.Document.workspace_id.is_not(None),
+        )
+        .group_by(db.Document.workspace_id)
+    )
+    convos = await session.execute(
+        select(db.Conversation.workspace_id, func.count())
+        .where(
+            db.Conversation.user_id == user_id,
+            db.Conversation.workspace_id.is_not(None),
+        )
+        .group_by(db.Conversation.workspace_id)
+    )
+    return (
+        {row[0]: row[1] for row in docs.all()},
+        {row[0]: row[1] for row in convos.all()},
+    )
 
 
 async def _counts(
@@ -100,11 +143,15 @@ async def list_workspaces(
         .order_by(db.Workspace.updated_at.desc())
     )
     workspaces = result.scalars().all()
-    out = []
-    for workspace in workspaces:
-        doc_count, convo_count = await _counts(session, user_id, workspace.id)
-        out.append(_serialise(workspace, document_count=doc_count, conversation_count=convo_count))
-    return out
+    doc_counts, convo_counts = await _counts_for_all(session, user_id)
+    return [
+        _serialise(
+            workspace,
+            document_count=doc_counts.get(workspace.id, 0),
+            conversation_count=convo_counts.get(workspace.id, 0),
+        )
+        for workspace in workspaces
+    ]
 
 
 @router.get("/workspaces/{workspace_id}")

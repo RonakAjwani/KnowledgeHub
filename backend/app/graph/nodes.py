@@ -371,7 +371,12 @@ async def _search_per_document(
     ``overview_chunks_per_doc``. Every document is represented by construction,
     so a listing is complete and a summary is not written from a keyhole.
     """
-    doc_ids = state.get("selected_doc_ids") or await deps.list_docs(state["user_id"])  # type: ignore[misc]
+    # `None` and `[]` are different questions here too, and `or` collapsed them:
+    # an empty selection fell through to *every* document the user owns, so an
+    # overview asked inside an empty workspace summarised other workspaces. Only
+    # `None` - "no restriction" - may fall back to the full list.
+    selected = state.get("selected_doc_ids")
+    doc_ids = await deps.list_docs(state["user_id"]) if selected is None else selected  # type: ignore[misc]
     if not doc_ids:
         return []
 
@@ -421,7 +426,17 @@ async def retrieve_node(state: QueryState, deps: Deps) -> dict:
     # Skipping here is the design working, not a shortcut - it avoids a Qdrant
     # call on every first turn of every conversation.
     if not state.get("rewritten", False):
-        if not raw_candidates and attempt == 0:
+        # An empty selection is not a failed search - it is a search that was
+        # correctly scoped to nothing, which is what a workspace with no ready
+        # documents produces. Caught by the end-to-end regression rather than by
+        # any single-stage probe: once `_scope` stopped treating `[]` as "no
+        # filter" (finding 4.1), an empty workspace legitimately returned zero
+        # candidates for the first time, and this guard read that as a dead
+        # dependency and raised a 503. Asking a question in a brand-new
+        # workspace answered with an error page instead of "I could not find
+        # anything", which is a worse outcome than the leak 4.1 removed.
+        scoped_to_nothing = state.get("selected_doc_ids") == []
+        if not raw_candidates and attempt == 0 and not scoped_to_nothing:
             # Total failure. Retrieval is the product; it has no fallback.
             from app.errors import DependencyUnavailable
 
@@ -611,6 +626,42 @@ async def retry_node(state: QueryState, deps: Deps) -> dict:
 
     A separate node rather than an increment inside ``retrieve`` so the cap is
     visible in the graph topology rather than buried in a branch.
+
+    **KNOWN LIMITATION - the corrective attempt currently corrects nothing.**
+    The graph edge is ``retry -> retrieve``, deliberately skipping ``rewrite``
+    to keep an LLM call off the retry path. But that leaves ``effective_queries``
+    untouched, so the second attempt re-runs the *identical* search and gets, of
+    necessity, identical results. Setting ``rewritten`` here is what routes it
+    down the cross-formulation merge, where it fuses a result set with a copy of
+    itself.
+
+    That used to be actively harmful rather than merely useless. Until
+    ``fuse_formulations`` was fixed (finding 7.1, 2026-08-02) the merge rebuilt
+    scores from rank, so two identical contributions doubled every score and the
+    retry reported success by construction: an unanswerable question scored
+    0.4543 on attempt 0, correctly asked for a retry, came back 0.9085 and
+    answered. The retry was converting correct refusals into confident wrong
+    answers. Now the score is unchanged across the two attempts, so a bad first
+    attempt stays bad and ``grade`` reaches ``abstain`` as designed - the retry
+    costs one embed and three Qdrant calls to re-learn what it already knew.
+
+    **The real fix is query expansion**, the classical IR answer to a failed
+    retrieval: route the retry through ``rewrite`` asking for alternative
+    phrasings - synonyms and the vocabulary the documents would actually use -
+    so the second attempt searches for something different. That repairs genuine
+    vocabulary mismatch ("peak headway" vs "service interval at peak") and gives
+    the merge two result sets that really do differ, which is what it was built
+    for. Not done yet because it hands every failing question a second chance to
+    find something, and whether that helps or hurts depends on where
+    ``FLOOR_FUSED`` sits - which the 53-question sweep settled as a *backstop*
+    precisely because no threshold separates topically-adjacent unanswerables.
+    Loosening recall on that path needs measurement against a golden set, not a
+    guess. Note also that simply widening ``retrieve_top_k`` on the retry is the
+    wrong repair and looks like the right one: ``relevance_score`` is
+    ``0.6*max + 0.4*mean``, so a wider net dilutes the mean and *lowers* the
+    score.
+
+    Full write-up: obsidian_vault/Session Handoff 2026-08-02.md, Stage 11.
     """
     return {"attempt": state.get("attempt", 0) + 1, "rewritten": True}
 
@@ -625,7 +676,10 @@ async def generate_node(state: QueryState, deps: Deps) -> dict:
     :func:`stream_answer`, which shares the same assembly so the two cannot
     drift apart in how they frame untrusted content.
     """
-    messages, chunk_ids = build_generate_messages(state)
+    messages, chunk_ids, dropped = build_generate_messages(state)
+    degradations = state.get("degradations", [])
+    if dropped:
+        degradations = [*degradations, context_trim_degradation(dropped, len(chunk_ids))]
     try:
         answer = await deps.llm.complete(
             messages,
@@ -638,7 +692,7 @@ async def generate_node(state: QueryState, deps: Deps) -> dict:
 
         raise DependencyUnavailable("llm", "Answer generation failed.") from exc
 
-    return {"answer": answer, "citations": []}
+    return {"answer": answer, "citations": [], "degradations": degradations}
 
 
 def context_budget(state: QueryState, settings: Settings | None = None) -> int:
@@ -701,7 +755,7 @@ def fit_context(
 
 def build_generate_messages(
     state: QueryState, *, context_tokens: int | None = None
-) -> tuple[list[Message], list[str]]:
+) -> tuple[list[Message], list[str], int]:
     """Assemble the generate prompt, optionally under a tighter token budget.
 
     ``context_tokens`` overrides ``max_context_tokens`` for this build alone. It
@@ -709,6 +763,16 @@ def build_generate_messages(
     switches to has a *lower* per-minute ceiling than the primary, so replaying
     the primary's prompt at full size would 413 on the one path that is supposed
     to be the safety net.
+
+    Returns the number of candidates ``fit_context`` dropped as a third value.
+    That count used to be discarded at this call site (``candidates, _ =``) even
+    though `fit_context`'s docstring exists to explain why the caller needs it -
+    so a context shortened to fit the token budget was invisible, which is what
+    I1 forbids. It never fires on a corpus of short sections (measured: 12
+    chunks of the demo corpus total 1,465 tokens against a 4,000 budget) and
+    fires hard on one of long sections, where 12 parents near the 1,200-token
+    cap exceed the budget three times over and two thirds of the evidence is
+    dropped without a word.
     """
     cfg = get_settings()
     # An explicit override always wins - the rate-limit fallback passes one, and
@@ -719,17 +783,34 @@ def build_generate_messages(
         cfg = cfg.model_copy(update={"max_context_tokens": context_tokens})
 
     candidates = state.get("candidates", [])[: context_budget(state)]
-    candidates, _ = fit_context(candidates, cfg)
+    candidates, dropped = fit_context(candidates, cfg)
     user_message, chunk_ids = prompts.build_generate_user_message(
         state.get("effective_query", state["raw_query"]),
         candidates,
         recent_turns=state.get("recent_turns", []),
         rolling_summary=state.get("rolling_summary"),
     )
-    return [
-        Message(role="system", content=prompts.GENERATE_SYSTEM),
-        Message(role="user", content=user_message),
-    ], chunk_ids
+    return (
+        [
+            Message(role="system", content=prompts.GENERATE_SYSTEM),
+            Message(role="user", content=user_message),
+        ],
+        chunk_ids,
+        dropped,
+    )
+
+
+def context_trim_degradation(dropped: int, kept: int) -> Degradation:
+    """The I1 record for a context shortened to fit the token budget."""
+    return Degradation(
+        stage=DegradationStage.GENERATE,
+        reason=DegradationReason.CAP_REACHED,
+        fallback=f"{kept} of {kept + dropped} passages",
+        detail=(
+            f"{dropped} retrieved passage(s) did not fit the context budget and "
+            "were not shown to the model."
+        ),
+    )
 
 
 # ----------------------------------------------------------------- terminals

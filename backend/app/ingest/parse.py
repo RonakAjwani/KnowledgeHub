@@ -19,6 +19,7 @@ decide whether to spend an LLM call is not a saving.
 
 from __future__ import annotations
 
+import codecs
 import io
 import logging
 import re
@@ -297,6 +298,113 @@ def _rescue_borderless_tables(page: pdfplumber.page.Page, text: str) -> list:
     try:
         return (
             page.find_tables(
+                {"vertical_strategy": "text", "horizontal_strategy": "text"}
+            )
+            or []
+        )
+    except Exception:  # noqa: BLE001 - same contract as the default detector:
+        return []  # a page that defeats detection still has readable prose
+
+
+_FEATURE_HEADER_RE = re.compile(
+    r"^[ \t]*Feature(?:\s+[A-Z][\w/&+-]*){2,}[ \t]*$", re.M
+)
+
+# Verbs and connectives dense enough in a sentence restating a table's rows in
+# prose, absent enough from a row label or a cell value, to tell the two apart
+# without relying on line length. Deliberately excludes "to"/"per"/"a"/"of" -
+# common inside cell values themselves ("Up to 5", "Boards per Workspace") -
+# and keys on words that only a narrating sentence uses: verbs conjugated onto
+# a plan as its subject ("includes", "commits"), and clause connectives.
+_FUNCTION_WORDS = frozenset(
+    "includes allows adds commits extends provides supports removes raises "
+    "caps still has plan plans that this terms above".split()
+)
+
+
+def _function_word_count(words: list[dict]) -> int:
+    return sum(1 for w in words if w["text"].lower().strip(",.:;") in _FUNCTION_WORDS)
+
+
+def _rescue_feature_grid(page: pdfplumber.page.Page, text: str) -> list:
+    """Find a plan/tier comparison grid: a "Feature Plan1 Plan2 ..." header row
+    with no ruling lines and no caption to trigger the caption-gated rescue.
+
+    MEASURED on a SaaS pricing PDF: `find_tables()` found zero tables (no
+    rulings) and the page carries no "Table N" caption (it is prose, not a
+    paper), so the feature grid fell all the way through to the generic
+    column-alignment recovery too - which requires several purely-numeric
+    cells per row to seed a column anchor, and this table's cells are mostly
+    words ("Up to 5", "Unlimited", "Yes", "Not available"). The row survived
+    as reflowed prose: "Audit log Not Not 90 days 12 months retention
+    available available" - the header and two plans' values silently
+    reordered off their own row.
+
+    Scoped to a bounding box around just the header-to-last-aligned-row span,
+    not the whole page: running the noisy text-strategy detector page-wide
+    (the fix tried first) pulled the title and the paragraph restating the
+    table into the same "table", corrupting both - the same regression
+    `_rescue_borderless_tables` was kept narrow to avoid. Requiring the
+    literal word "Feature" as the header's first cell is deliberately strict:
+    it is the one token a plan-comparison table reliably prints and an
+    ordinary paragraph does not open a line with, so this cannot fire on
+    prose the way a looser structural guess could.
+    """
+    # The cheap gate first. This runs on every page the default detector and the
+    # caption-gated rescue both passed on - i.e. nearly every prose page in
+    # every document - and `extract_words` is a full geometric pass over the
+    # page. The header this looks for requires the literal token "Feature", so
+    # a page whose already-extracted text does not contain that token cannot
+    # produce one, and the whole pass is skipped. Deliberately the bare token
+    # rather than the header regex: `extract_text` and the word-grouping below
+    # can disagree about where a line breaks, and a stricter gate here could
+    # skip a grid the grouping would have found.
+    if "Feature" not in text:
+        return []
+    try:
+        words = page.extract_words(x_tolerance_ratio=_X_TOLERANCE_RATIO) or []
+    except Exception:  # noqa: BLE001
+        return []
+    lines: list[tuple[float, float, list[dict]]] = []
+    for word in sorted(words, key=lambda w: (round(w["top"], 1), w["x0"])):
+        if lines and abs(lines[-1][0] - word["top"]) <= 2.5:
+            lines[-1][2].append(word)
+        else:
+            lines.append((word["top"], word["bottom"], [word]))
+
+    header_index = None
+    for i, (_, _, ws) in enumerate(lines):
+        text = " ".join(w["text"] for w in ws)
+        if _FEATURE_HEADER_RE.match(text) and len(ws) >= 3:
+            header_index = i
+            break
+    if header_index is None:
+        return []
+
+    # Extend down through table rows and stop at the first line that reads as
+    # a full sentence, marking prose resuming below the grid. Word count alone
+    # does not separate the two: an unwrapped row ("Workspace members Up to 5
+    # Up to 15 Up to 100 Unlimited") can run as long as a short sentence.
+    # Function-word density is the more reliable signal - row labels and cell
+    # values are noun phrases and bare figures ("Boards per Workspace",
+    # "Unlimited"), so they carry at most one or two words like "to"/"per",
+    # while a sentence stringing a row's facts into prose ("...includes no
+    # automation rules, no SSO, no audit log...") is built from them.
+    end_index = header_index
+    for i in range(header_index + 1, len(lines)):
+        _, _, ws = lines[i]
+        if _function_word_count(ws) > 2:
+            break
+        end_index = i
+    if end_index - header_index < _MIN_TABLE_ROWS:
+        return []
+
+    top = lines[header_index][0] - 2
+    bottom = lines[end_index][1] + 2
+    try:
+        cropped = page.crop((0, max(top, 0), page.width, min(bottom, page.height)))
+        return (
+            cropped.find_tables(
                 {"vertical_strategy": "text", "horizontal_strategy": "text"}
             )
             or []
@@ -651,6 +759,7 @@ def parse_pdf(data: bytes) -> ParseResult:
 
             page_text = page.extract_text(x_tolerance_ratio=_X_TOLERANCE_RATIO) or ""
             tables = tables or _rescue_borderless_tables(page, page_text)
+            tables = tables or _rescue_feature_grid(page, page_text)
             assessments.append(_assess_page(page, tables, page_text))
 
             # Walk the page top to bottom, carving prose out of the gaps between
@@ -739,6 +848,71 @@ def parse_pdf(data: bytes) -> ParseResult:
 # ------------------------------------------------------------------ entrypoint
 
 
+# Byte-order marks, longest first: the UTF-32-LE mark begins with the whole
+# UTF-16-LE mark, so checking UTF-16 first would decode a UTF-32 file as UTF-16.
+#
+# Each maps to the **BOM-aware** codec (`utf-16`, not `utf-16-le`), which reads
+# the mark, picks the endianness from it and consumes it. The endian-specific
+# codecs decode the bytes correctly but leave the mark in the string as a stray
+# `﻿` - and `sanitize_text` would strip it later, but not before
+# `parse_markdown` had already failed to match its `^(#{1,6})` heading regex
+# against `﻿# Title`, losing the document's first heading and shifting
+# every section path under it.
+_BOMS: tuple[tuple[bytes, str], ...] = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+def decode_text(data: bytes) -> str:
+    """Decode an uploaded text/markdown file, guessing the encoding sensibly.
+
+    This used to be ``data.decode("utf-8")`` with ``errors="replace"`` behind it,
+    which is silent corruption for anything a Windows tool wrote. MEASURED
+    across encodings: pure-ASCII content survived everything (the interleaved
+    NULs of a UTF-16 file are stripped later as control characters, which
+    repairs it by accident), but **non-ASCII content was destroyed in every
+    non-UTF-8 encoding** - "Café" became "Caf\\ufffd" under cp1252, latin-1 and
+    UTF-16 alike, and CJK under UTF-16 became noise.
+
+    That is not an exotic case. cp1252 is what a text file saved out of a
+    Windows editor is, and it is where curly quotes, em dashes, £/€ and every
+    accented name live - so a document copy-pasted out of Word loses a character
+    at every smart quote, and nothing reports it.
+
+    The ladder, in order of how much the file itself tells us:
+
+    1. **A BOM.** An explicit declaration by whoever wrote the file; it outranks
+       any guess, and ``utf-8-sig`` also strips the mark itself.
+    2. **UTF-8, strictly.** Tried before any fallback so every file that already
+       worked decodes to exactly the same string as before.
+    3. **cp1252, then latin-1.** What Windows writes when it writes "text".
+       cp1252 leaves five bytes undefined and raises on them; latin-1 maps all
+       256 and cannot fail, so the ladder always terminates.
+
+    BOM-less UTF-16 remains undetectable without statistical guessing, and is
+    left alone deliberately - its ASCII content already survives via the NUL
+    stripping above, and guessing would risk mis-decoding a valid latin-1 file.
+    """
+    for bom, encoding in _BOMS:
+        if data.startswith(bom):
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                break  # mislabelled by its own BOM; fall through to the ladder
+
+    for encoding in ("utf-8", "cp1252", "latin-1"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return data.decode("utf-8", errors="replace")
+
+
 def parse_document(data: bytes, mime: str) -> ParseResult:
     """Parse raw bytes into ordered blocks. Raises ``UnsupportedDocument`` on failure.
 
@@ -753,9 +927,18 @@ def parse_document(data: bytes, mime: str) -> ParseResult:
     if kind == "pdf":
         return parse_pdf(data)
 
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        text = data.decode("utf-8", errors="replace")
+    text = decode_text(data)
+    result = parse_markdown(text) if kind == "markdown" else parse_plain_text(text)
 
-    return parse_markdown(text) if kind == "markdown" else parse_plain_text(text)
+    # The same guard `parse_pdf` applies, and for the same reason. Without it an
+    # empty or whitespace-only upload parsed "successfully" into zero blocks,
+    # ingested to `ready` with zero chunks, and sat in the document list looking
+    # searchable while matching nothing - the exact silent-partial-index outcome
+    # this function's docstring rules out, reached by the one file type that had
+    # no check.
+    if not result.blocks:
+        raise UnsupportedDocument(
+            "No readable text found. The file appears to be empty."
+        )
+
+    return result

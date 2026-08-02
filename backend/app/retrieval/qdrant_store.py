@@ -381,11 +381,26 @@ def _scope(user_id: str, doc_ids: list[str] | None) -> models.Filter:
     subset of their documents - the "Multi-" in the project title, and the reason
     per-document checkboxes in the UI are backed by a payload filter rather than
     post-filtering in application code.
+
+    **``None`` and ``[]`` are different questions and must not collapse.**
+    ``None`` means "no document restriction"; ``[]`` means "restricted to no
+    documents", which can only return nothing. This tested ``if doc_ids:``,
+    which is falsy for both - so an empty list silently became an unrestricted
+    search. MEASURED: a chat scoped to an *empty workspace* (``chat.py`` builds
+    the list from that workspace's rows, so an empty one yields ``[]``) retrieved
+    a document belonging to a different workspace, contradicting the promise
+    three lines above that query that a chat only searches what was put in its
+    workspace. I3 still held throughout - ``user_id`` is unconditional - so this
+    was a workspace-isolation failure, never a tenant one.
+
+    ``MatchAny(any=[])`` matches nothing on Qdrant 1.18 - measured, not assumed,
+    since "empty means match nothing" and "empty means no constraint" are both
+    defensible readings of such an API.
     """
     conditions: list[models.Condition] = [
         models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))
     ]
-    if doc_ids:
+    if doc_ids is not None:
         conditions.append(
             models.FieldCondition(key="doc_id", match=models.MatchAny(any=doc_ids))
         )

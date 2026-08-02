@@ -268,3 +268,38 @@ async def test_turn_start_carries_the_conversation_id() -> None:
 
     assert events[0][0] == "turn.start"
     assert events[0][1]["conversation_id"] == "conv-1"
+
+
+async def test_a_terminal_nodes_answer_reaches_the_client_as_a_delta() -> None:
+    """`refuse` and `history` build their answer in one piece, but §8 gives the
+    answer text exactly one transport - `answer.delta`. `answer.complete` carries
+    `{message_id, citations}` and no text, and the client concatenates deltas to
+    get the answer, so emitting only `answer.complete` persisted a real answer
+    while the bubble rendered empty.
+
+    Measured before the fix: an out-of-scope question produced
+    `turn.start -> pipeline.stage x2 -> answer.complete`, zero deltas.
+    """
+    from app.api.turn import TurnRunner
+
+    runner = TurnRunner(session=None, deps=None)  # type: ignore[arg-type]
+
+    async def _no_persist(state, message_id, citations) -> None:
+        return None
+
+    runner._persist = _no_persist  # type: ignore[method-assign]
+
+    state = {"answer": "That is outside what I can help with here.", "attempt": 0}
+    events = parse([f async for f in runner._emit_unstreamed_answer(state, "m1")])  # type: ignore[arg-type]
+
+    names = [e for e, _ in events]
+    assert "answer.delta" in names, "the answer text never reached the wire"
+    text = "".join(d["text"] for e, d in events if e == "answer.delta")
+    assert text == state["answer"]
+
+    # §8 invariant 3: a delta only ever appears after generate started.
+    started = names.index("pipeline.stage")
+    stage = events[started][1]
+    assert (stage["node"], stage["state"], stage["attempt"]) == ("generate", "started", 0)
+    assert started < names.index("answer.delta") < len(names) - 1
+    assert names[-1] == "answer.complete"

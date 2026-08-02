@@ -204,8 +204,32 @@ failure than running an unnecessary search, so when uncertain, choose "retrieve"
 """
 
 
+# How much of any single earlier turn to replay into the route/rewrite prompts.
+#
+# The turn *count* was capped (4 here, 6 for rewrite) but each turn's text was
+# not, and an assistant answer has no length limit. MEASURED with five turns of
+# realistic answers: the rewrite prompt reached **17,778 characters (~4,714
+# tokens)** and the route prompt ~3,146 - to classify one short message into one
+# of four words, and to resolve one pronoun. Both are per-turn costs on a free
+# tier, both grow with the conversation, and neither has a ceiling.
+#
+# Truncation is from the tail on purpose: the long turns are assistant answers,
+# while the referent a follow-up needs ("the Team plan", "that error code") is
+# in the short user turns or the opening of an answer. Cutting the end of a long
+# answer costs the least coreference signal per character removed.
+_TURN_REPLAY_CHARS = 600
+
+
+def _replay(turn: Turn) -> str:
+    """One earlier turn, capped, for a prompt that only needs its gist."""
+    content = turn["content"]
+    if len(content) > _TURN_REPLAY_CHARS:
+        content = f"{content[:_TURN_REPLAY_CHARS].rstrip()} [...]"
+    return f"{turn['role']}: {content}"
+
+
 def build_route_messages(query: str, recent_turns: Sequence[Turn]) -> str:
-    context = "\n".join(f"{t['role']}: {t['content']}" for t in recent_turns[-4:])
+    context = "\n".join(_replay(t) for t in recent_turns[-4:])
     prefix = f"Conversation so far:\n{context}\n\n" if context else ""
     return f"{prefix}Message to classify: {query}"
 
@@ -260,7 +284,9 @@ def build_rewrite_messages(
         known = "\n".join(f"- {k}: {v}" for k, v in entity_ledger.items())
         parts.append(f"Entities mentioned earlier:\n{known}")
     if recent_turns:
-        transcript = "\n".join(f"{t['role']}: {t['content']}" for t in recent_turns[-6:])
+        # Capped per turn - see `_TURN_REPLAY_CHARS`. This prompt replays six
+        # turns rather than four, so it was the larger of the two by half again.
+        transcript = "\n".join(_replay(t) for t in recent_turns[-6:])
         parts.append(f"Conversation so far:\n{transcript}")
     parts.append(f"Follow-up message: {query}")
     return "\n\n".join(parts)
@@ -269,9 +295,18 @@ def build_rewrite_messages(
 # ----------------------------------------------------------------- G4 verify
 
 VERIFY_SYSTEM = """\
-You check whether a claim is supported by source text.
+You check whether a claim is supported by source text. The source may be prose
+or a markdown table; in a table, read each row across its own columns
+carefully before deciding - it is easy to mis-read a value from a neighboring
+column or row, especially when nearby cells hold similar-looking values (a
+row of percentages, several "Yes"/"No" cells, etc).
 
-Return JSON only: {"supported": true | false, "reason": "<one short sentence>"}
+Return JSON only:
+{"reason": "<one short sentence citing the exact row/column checked>", "supported": true | false}
+
+Write "reason" first, working out which row and column the claim's value
+actually corresponds to, before deciding "supported" - the verdict must follow
+from the reason, not the other way around.
 
 "supported" is true when the source text states the claim or directly entails it.
 It is false when the source contradicts the claim, or simply does not address it.

@@ -27,8 +27,18 @@ export function Providers({ children }: { children: ReactNode }) {
           queries: {
             staleTime: 10_000,
             retry: (failureCount, error) => {
-              // Don't retry the 4xx cases - a 404 or 415 will not become a 200.
               const status = (error as { status?: number })?.status;
+              // A 401 can be a genuinely dead session, but it's also what a
+              // query fired right as Clerk finishes loading looks like - the
+              // token it grabbed was stale by a few hundred ms. Retrying once
+              // re-runs queryFn, which re-fetches a token from Clerk rather
+              // than reusing the one that failed, so a race clears itself
+              // instead of leaving the query permanently failed until a
+              // manual reload. A session that is actually dead just fails
+              // the same way on the second try.
+              if (status === 401) return failureCount < 1;
+              // Don't retry the other 4xx cases - a 404 or 415 will not
+              // become a 200.
               if (status && status >= 400 && status < 500) return false;
               return failureCount < 2;
             },

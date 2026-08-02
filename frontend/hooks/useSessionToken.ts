@@ -13,6 +13,14 @@
  * only inside `useChatStream`, duplicated here rather than imported so a
  * workspace sidebar (or anything else) doesn't have to render a chat stream
  * just to get a token.
+ *
+ * Also exposes `isLoaded`/`isSignedIn`, so a query that needs auth can hold
+ * off firing until Clerk has actually hydrated a session. Without this, a
+ * `useQuery` that fires on mount can call `getToken()` before Clerk is ready
+ * and get back a token the backend rejects as expired/invalid - indistinguishable
+ * from a real expiry, but really just a race between the fetch and the SDK.
+ * Dev mode has no session to wait on, so it reports itself as always loaded
+ * and signed in.
  */
 
 import { useAuth } from "@clerk/nextjs";
@@ -22,15 +30,29 @@ import { CLERK_ENABLED } from "@/lib/utils";
 
 export type TokenGetter = () => Promise<string | null>;
 
-function useClerkToken(): TokenGetter {
-  const { getToken } = useAuth();
-  return getToken;
+export interface SessionToken {
+  getToken: TokenGetter;
+  isLoaded: boolean;
+  isSignedIn: boolean;
 }
 
-function useAnonymousToken(): TokenGetter {
-  return useCallback(async () => null, []);
+function useClerkSessionToken(): SessionToken {
+  const { getToken, isLoaded, isSignedIn } = useAuth();
+  return { getToken, isLoaded, isSignedIn: isSignedIn ?? false };
 }
 
-export const useSessionToken: () => TokenGetter = CLERK_ENABLED
-  ? useClerkToken
-  : useAnonymousToken;
+function useAnonymousSessionToken(): SessionToken {
+  const getToken = useCallback(async () => null, []);
+  return { getToken, isLoaded: true, isSignedIn: true };
+}
+
+const useSessionTokenState: () => SessionToken = CLERK_ENABLED
+  ? useClerkSessionToken
+  : useAnonymousSessionToken;
+
+/** Back-compat shorthand for callers that only need the token getter. */
+export function useSessionToken(): TokenGetter {
+  return useSessionTokenState().getToken;
+}
+
+export { useSessionTokenState };

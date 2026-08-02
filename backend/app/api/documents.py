@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from functools import lru_cache
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -141,6 +142,18 @@ async def _owned_workspace(session: AsyncSession, user_id: str, workspace_id: st
         raise NotFound("No such workspace.")
 
 
+@lru_cache(maxsize=1)
+def _ingest_slots() -> asyncio.Semaphore:
+    """Process-wide cap on documents in ingest at once.
+
+    Built lazily rather than at import: a `Semaphore` binds to the running loop
+    on first use, and constructing it at module scope binds it to whichever
+    loop imported the module - which is not the one serving requests under
+    pytest-asyncio, where each test gets a fresh loop.
+    """
+    return asyncio.Semaphore(get_settings().ingest_max_concurrency)
+
+
 async def _run_ingest(doc_id: str, user_id: str, data: bytes, mime: str) -> None:
     """Background ingest with its own session - the request's is long gone."""
     maker: async_sessionmaker[AsyncSession] = get_sessionmaker()
@@ -151,11 +164,19 @@ async def _run_ingest(doc_id: str, user_id: str, data: bytes, mime: str) -> None
             payload["progress"] = progress
         _publish(document_id, "document.status", payload)
 
-    async with maker() as session:
-        pipeline = IngestPipeline(publisher=publisher)
-        result = await pipeline.ingest(
-            session, document_id=doc_id, user_id=user_id, data=data, mime=mime
-        )
+    # Queued, not run immediately. MEASURED: six documents uploaded into one
+    # workspace put six ingests in flight at once, each holding a pooled
+    # connection for its whole run, and the pool (5 + 2 overflow) ran out -
+    # every unrelated request then blocked 30 s on checkout and 500'd. The
+    # document sits in `queued` until a slot frees, which is a status the UI
+    # already renders; the session is opened *inside* the semaphore so a
+    # waiting document holds no connection at all.
+    async with _ingest_slots():
+        async with maker() as session:
+            pipeline = IngestPipeline(publisher=publisher)
+            result = await pipeline.ingest(
+                session, document_id=doc_id, user_id=user_id, data=data, mime=mime
+            )
 
     # Exactly one terminal event per stream.
     if result.status is DocumentStatus.READY:
@@ -247,6 +268,24 @@ async def document_events(
 ) -> StreamingResponse:
     """Progress for one document. Exactly one terminal event, then close."""
     document = await _owned(session, user_id, doc_id)
+    # Everything this stream needs, read now and copied out of the ORM object.
+    snapshot = {
+        "status": document.status,
+        "chunk_count": document.chunk_count,
+        "extraction": document.extraction,
+        "error": document.error,
+    }
+    # Then hand the connection back before streaming. MEASURED: without this,
+    # `pg_stat_activity` showed one connection per open ingest stream sitting
+    # `idle in transaction` for the full length of the ingest - the read
+    # transaction `_owned` opened, kept alive purely because the session is a
+    # `Depends` and FastAPI does not release it until the response completes.
+    # Three concurrent uploads pinned three of seven pool slots that way, and
+    # a fourth tipped the pool into `QueuePool limit ... connection timed out`.
+    # Nothing below touches Postgres: progress arrives over an in-process
+    # queue, so the stream genuinely needs no session. `get_session`'s own
+    # `async with` closes it again on the way out, which is a no-op.
+    await session.close()
     stream = EventStream()
 
     async def source() -> AsyncIterator[str]:
@@ -256,30 +295,30 @@ async def document_events(
             # Emit current state immediately: a client that connects after
             # ingest finished would otherwise wait forever for an event that
             # has already been published.
-            if document.status == str(DocumentStatus.READY):
+            if snapshot["status"] == str(DocumentStatus.READY):
                 yield stream.frame(
                     "document.complete",
                     {
                         "document_id": doc_id,
-                        "chunk_count": document.chunk_count,
-                        "extraction": document.extraction,
+                        "chunk_count": snapshot["chunk_count"],
+                        "extraction": snapshot["extraction"],
                     },
                 )
                 return
-            if document.status == str(DocumentStatus.FAILED):
+            if snapshot["status"] == str(DocumentStatus.FAILED):
                 yield stream.frame(
                     "document.error",
                     {
                         "document_id": doc_id,
                         "code": "invalid_request",
-                        "message": document.error or "Ingest failed.",
+                        "message": snapshot["error"] or "Ingest failed.",
                     },
                 )
                 return
 
             yield stream.frame(
                 "document.status",
-                {"document_id": doc_id, "status": document.status},
+                {"document_id": doc_id, "status": snapshot["status"]},
             )
 
             while True:

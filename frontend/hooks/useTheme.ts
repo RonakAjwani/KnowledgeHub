@@ -2,19 +2,21 @@
 
 /**
  * Three-way preference (system/light/dark), like the reference's own
- * Appearance control - but "system" is opt-in, not the default: dark stays
- * the fallback for a visitor with nothing stored yet (see `layout.tsx`'s
- * blocking init script), since the reference this design follows is dark
- * throughout and a first-time visitor should land on the theme the app is
- * actually designed around, not whatever their OS happens to prefer.
+ * Appearance control - and **"system" is the default**, not an opt-in. A
+ * visitor with nothing stored gets whatever their OS asks for, on the landing
+ * page as much as inside the app. (This previously defaulted to dark on the
+ * argument that the design is dark-first; that was overridden deliberately -
+ * both themes are fully supported, so there is nothing to protect by
+ * overriding the OS, and doing so reads as the app ignoring the setting.)
+ * Keep this in step with `layout.tsx`'s blocking init script: the two agree on
+ * the default, and a mismatch would flash the wrong theme on first paint.
  *
- * The *resolved* light/dark value drives `.dark` on `<html>`, exactly as
- * before. The *preference* itself (which of the three the user actually
- * picked) has to be tracked separately - `.dark`'s presence alone can't
- * distinguish "explicitly dark" from "system, currently resolving dark" -
- * so it's mirrored into a `data-theme-pref` attribute on the same element by
- * the same blocking script, which is what makes it readable via
- * `useSyncExternalStore` without a hydration mismatch.
+ * The *resolved* light/dark value drives `.dark` on `<html>`. The *preference*
+ * itself has to be tracked separately - `.dark`'s presence alone can't
+ * distinguish "explicitly dark" from "system, currently resolving dark" - so
+ * it's mirrored into a `data-theme-pref` attribute on the same element by that
+ * same script, which is what makes it readable via `useSyncExternalStore`
+ * without a hydration mismatch.
  */
 
 import { useCallback, useSyncExternalStore } from "react";
@@ -29,6 +31,13 @@ function isTheme(value: string | null): value is Theme {
 }
 
 function systemPrefersDark(): boolean {
+  // Guarded for the server render. `resolve("system")` is now reachable during
+  // SSR - it was not while the default was "dark", which never touched
+  // `matchMedia` - and an unguarded read here would crash the render rather
+  // than fall back. The value returned server-side is immaterial: the blocking
+  // script in `layout.tsx` puts the real class on `<html>` before first paint,
+  // and `useSyncExternalStore` swaps to the live snapshot on hydration.
+  if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
@@ -43,14 +52,13 @@ function apply(preference: Theme) {
 
 function getSnapshot(): Theme {
   const attr = document.documentElement.getAttribute(PREF_ATTR);
-  return isTheme(attr) ? attr : "dark";
+  return isTheme(attr) ? attr : "system";
 }
 
-// The server never knows the visitor's stored preference - it always renders
-// "dark", matching the blocking script's default when nothing is in
-// localStorage yet (or localStorage is unreadable).
+// The server never knows the visitor's stored preference, so it renders the
+// same default the blocking script applies when nothing is in localStorage.
 function getServerSnapshot(): Theme {
-  return "dark";
+  return "system";
 }
 
 function subscribe(callback: () => void) {

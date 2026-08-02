@@ -56,6 +56,11 @@ logger = logging.getLogger(__name__)
 COHERE_RERANK_URL = "https://api.cohere.com/v2/rerank"
 COHERE_RPM = 10
 
+# Matches `app/llm/cache.py`'s bound, for the same reason: an unbounded cache
+# inside a 512 MB ceiling is a leak however slow. An eviction costs one Cohere
+# call on a query last asked more than 512 distinct queries ago.
+_CACHE_MAX_ENTRIES = 512
+
 
 class RerankStatus(StrEnum):
     APPLIED = "applied"
@@ -173,7 +178,27 @@ class Reranker:
             )
 
         if self.breaker.is_tripped:
-            # Already known dead; no call, no timeout, no repeated degradation.
+            # No call and no timeout - the breaker's whole purpose - but the
+            # degradation is still recorded, on every turn.
+            #
+            # It used to be recorded only on the turn that tripped it, on the
+            # reasoning that repeating it is noise. MEASURED: turn 1 carried a
+            # `quota_exhausted` degradation and turns 2, 3 and 4 carried none,
+            # so every answer for the remainder of the deployment was served on
+            # fused order while looking exactly like a reranked one. That is I1's
+            # failure condition stated literally - "a degraded path must never be
+            # indistinguishable from a healthy one" - and the invariant is about
+            # each *answer*, so one record per answer is the correct rate rather
+            # than spam. `trip()` still returns True only once, so the breaker is
+            # not re-tripped and the warning is not re-logged.
+            degradations.append(
+                Degradation(
+                    stage=DegradationStage.RERANK,
+                    reason=DegradationReason.QUOTA_EXHAUSTED,
+                    fallback="fused order",
+                    detail=self.breaker.reason or "Reranking is disabled.",
+                )
+            )
             return RerankOutcome(candidates, RerankStatus.FAILED, degradations, margin)
 
         if not self.settings.cohere_api_key:
@@ -193,10 +218,49 @@ class Reranker:
             degradations.append(failure.degradation)
             return RerankOutcome(candidates, RerankStatus.FAILED, degradations, margin)
 
-        self._cache[key] = order
+        if not order:
+            # A 200 carrying nothing usable is a failure, not a rerank.
+            #
+            # MEASURED, and this was the quiet one: `{"results": []}`, a renamed
+            # `results` key, or every index out of range all produced
+            # `status=APPLIED` with every `rerank_score` None. `grade` then reads
+            # scores from the rerank source, finds an empty list, scores the turn
+            # **0.0**, and abstains - so a good retrieval became "I could not
+            # find that" with no degradation anywhere to explain it. An upstream
+            # response-shape change would have turned every query into an
+            # abstention silently.
+            #
+            # Worse, the empty order was cached, so one malformed response
+            # poisoned that (query, doc-set) permanently. Returning before the
+            # cache write is the important half of this fix.
+            degradations.append(
+                Degradation(
+                    stage=DegradationStage.RERANK,
+                    reason=DegradationReason.PARSE_ERROR,
+                    fallback="fused order",
+                    detail="Cohere returned no usable results; response shape "
+                    "may have changed.",
+                )
+            )
+            return RerankOutcome(candidates, RerankStatus.FAILED, degradations, margin)
+
+        self._remember(key, order)
         return RerankOutcome(
             _reorder(candidates, order), RerankStatus.APPLIED, degradations, margin
         )
+
+    def _remember(self, key: str, order: list[tuple[str, float]]) -> None:
+        """Store an ordering, bounded.
+
+        The cache was unbounded - 50 distinct queries left 50 entries and nothing
+        ever evicted. Each entry is small, so this was a slow leak rather than a
+        fast one, but "unbounded" inside a 512 MB ceiling is still a leak, and
+        the sibling prompt cache in `app/llm/cache.py` is already bounded at the
+        same size. Insertion-ordered dict, so the oldest key is simply the first.
+        """
+        self._cache[key] = order
+        while len(self._cache) > _CACHE_MAX_ENTRIES:
+            self._cache.pop(next(iter(self._cache)))
 
     async def _call_cohere(
         self, query: str, candidates: list[RetrievedChunk]

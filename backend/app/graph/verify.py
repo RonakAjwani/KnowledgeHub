@@ -188,12 +188,55 @@ class Verifier:
                     ),
                 ],
                 model=self.settings.llm_model_verify,
-                max_tokens=200,
+                # "reason" now comes before "supported" in the schema, so the
+                # model works out which row/column a claim maps to before
+                # committing to a verdict - MEASURED: this is what fixed a
+                # judge that read a table correctly in its own stated reason
+                # and then returned the opposite verdict anyway. 200 tokens
+                # was tuned for a one-line trailing reason and truncated that
+                # reasoning before the verdict token was reached.
+                max_tokens=350,
                 timeout=self.settings.timeout_llm_verify_s,
+                # NOT cached, unlike every other temperature-0 call in the
+                # system. MEASURED: the judge diverged once on a table-shaped
+                # source, and because the cache key is (model, messages,
+                # temperature, max_tokens) - all identical on a re-ask - that
+                # single wrong `false` was replayed for the rest of the
+                # process. Two `verify()` calls on the same answer made one
+                # HTTP call and returned the same verdict twice; only a
+                # restart cleared it. This is what made the bug look like a
+                # flaky judge and cost a session to chase.
+                #
+                # The distinction the cache was built on is that a cached call
+                # is a deterministic *transform*. A judgement is not one: the
+                # model can differ between two identical asks, and here that
+                # difference is the signal, not noise to be suppressed. A
+                # cached verdict turns one bad sample into a permanent wrong
+                # answer on the feature the product exists to make
+                # trustworthy. The cost of re-asking is one cheap call on a
+                # path that already runs after the answer has streamed.
+                use_cache=False,
             )
         except LLMError as exc:
+            # Covers a truncated response as well as a failed one: the prompt
+            # now asks for the reasoning *before* the verdict, so a response
+            # cut off at `max_tokens` loses the verdict rather than the
+            # explanation. `parse_json_tolerant` needs a balanced JSON span
+            # and never salvages a stray `true`/`false` from prose, so that
+            # lands here and returns `None`. I2 holds under truncation: an
+            # unfinished judgement reads as unknown, never as unsupported.
             logger.warning("verification judge failed: %s", exc)
             return None  # I2 - unknown, not unsupported
 
         supported = result.get("supported")
+        if supported is False:
+            # The one verdict worth explaining in a log. An unsupported
+            # citation is what a reviewer challenges, and the reason is the
+            # only record of *why* - without it, diagnosing a wrong `false`
+            # means re-running the judge and hoping it diverges again.
+            logger.info(
+                "judge: unsupported claim=%r reason=%r",
+                claim.text[:160],
+                str(result.get("reason", ""))[:240],
+            )
         return bool(supported) if isinstance(supported, bool) else None

@@ -1,0 +1,40 @@
+# Keeps the build context small. Docker packages this whole directory and ships
+# it to the daemon *before* the first instruction runs, so anything listed here
+# is never transferred at all. Without this file the context was 732 MB - 612 MB
+# of it `.venv` and 65 MB `.fastembed_cache` - paid on every `docker compose up
+# --build` and every ACR push.
+#
+# This changes build time only, never the image: the Dockerfile copies named
+# paths (`pyproject.toml`, `poetry.lock`, `app`, `alembic.ini`,
+# `docker-entrypoint.sh`) and never `COPY . .`. Contrast `frontend/.dockerignore`,
+# where the equivalent entry is load-bearing because that build *does* use
+# `COPY . .` and would otherwise overwrite the Linux `node_modules` with the
+# host's Windows one.
+#
+# Deliberately limited to generated and machine-local artefacts. `tests/`,
+# `scripts/` and `evals/` are not copied into the image either, but they are real
+# source - excluding them here would silently drop them if this Dockerfile ever
+# moves to `COPY . .`, which is exactly the trap the frontend comment describes.
+
+# Local virtualenv - Windows-native, and the image builds its own at /app/.venv.
+.venv/
+
+# Model weights, downloaded at runtime into a mounted volume, never baked in.
+.fastembed_cache/
+
+# Python and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.deepeval/
+
+# Secrets. The image receives configuration as environment variables; a .env
+# copied into a layer would outlive the container it was meant for.
+.env
+.env.*
+!.env.example
+
+# Eval run artefacts - per-run scratch, regenerated on demand.
+evals/results/

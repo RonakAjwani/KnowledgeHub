@@ -472,37 +472,75 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       const effectiveConversationId =
         conversationId ?? stateRef.current.conversationId ?? null;
 
-      try {
+      const requestBody = {
+        message: text,
+        // An explicitly supplied id wins (a sidebar switching conversations);
+        // otherwise use the one learned from the previous turn's
+        // `turn.start`. Null only on the very first turn, where the server
+        // mints one and reports it back.
+        conversation_id: effectiveConversationId,
+        // Only meaningful on that same first turn - the backend ignores it
+        // once a conversation already exists.
+        workspace_id: effectiveConversationId ? null : (workspaceId ?? null),
+        // `null` means "every ready document" per the contract; an empty
+        // array would be a request to search nothing.
+        selected_doc_ids:
+          selectedDocIds && selectedDocIds.length > 0 ? selectedDocIds : null,
+      };
+
+      // `streamChat` is a generator: calling it runs nothing yet, and the
+      // `fetch` (so `raiseForStatus`'s 401) only fires once the first value is
+      // pulled. So the retry has to advance the iterator once itself, inside
+      // the try/catch, rather than retry the call to `streamChat`. Safe to
+      // retry from scratch on a 401 - nothing has been applied to state yet -
+      // and one retry with a freshly fetched token covers a token that went
+      // stale while the tab sat idle; a session that is genuinely dead fails
+      // the same way again and surfaces normally as a failed turn.
+      const openStream = async () => {
         const token = await getToken();
+        const stream = streamChat(apiUrl ?? API_URL, requestBody, {
+          token,
+          signal: controller.signal,
+        });
+        const iterator = stream[Symbol.asyncIterator]();
+        const first = await iterator.next();
+        return { iterator, first };
+      };
+
+      try {
         if (!isCurrent()) {
           return { kind: "cancelled", answer: "", degradations: [] };
         }
 
-        const stream = streamChat(
-          apiUrl ?? API_URL,
-          {
-            message: text,
-            // An explicitly supplied id wins (a sidebar switching conversations);
-            // otherwise use the one learned from the previous turn's
-            // `turn.start`. Null only on the very first turn, where the server
-            // mints one and reports it back.
-            conversation_id: effectiveConversationId,
-            // Only meaningful on that same first turn - the backend ignores it
-            // once a conversation already exists.
-            workspace_id: effectiveConversationId ? null : (workspaceId ?? null),
-            // `null` means "every ready document" per the contract; an empty
-            // array would be a request to search nothing.
-            selected_doc_ids:
-              selectedDocIds && selectedDocIds.length > 0
-                ? selectedDocIds
-                : null,
-          },
-          { token, signal: controller.signal },
-        );
+        let opened: Awaited<ReturnType<typeof openStream>>;
+        try {
+          opened = await openStream();
+        } catch (err) {
+          if (err instanceof StreamHttpError && err.status === 401) {
+            opened = await openStream();
+          } else {
+            throw err;
+          }
+        }
+        const { iterator, first } = opened;
 
-        for await (const event of stream) {
-          if (!isCurrent()) break;
-          apply({ type: "event", event });
+        try {
+          for (
+            let step = first;
+            isCurrent() && !step.done;
+            step = await iterator.next()
+          ) {
+            apply({ type: "event", event: step.value });
+          }
+        } finally {
+          // `for await...of` closed the generator on `break`; a hand-rolled
+          // iterator loop does not, and this loop stops early every time a
+          // turn is superseded. Closing it runs `parseFrames`' `finally`,
+          // which releases the reader lock on the response body - the abort
+          // above tears down the socket either way, but leaving the generator
+          // suspended mid-`yield` means that cleanup never runs at all.
+          // No-op once the generator has already completed.
+          void iterator.return?.(undefined)?.catch(() => {});
         }
 
         if (isCurrent()) {

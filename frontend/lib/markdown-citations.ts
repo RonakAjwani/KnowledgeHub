@@ -106,3 +106,30 @@ export function remarkCitationMarkers() {
     walk(tree);
   };
 }
+
+/**
+ * The marker numbers an answer actually cites.
+ *
+ * The citation list the API returns is the *retrieval trace* - one entry per
+ * DATA block that reached the prompt, numbered by its position there. That is
+ * the right payload (it is what makes `[n]` resolvable, and it is the eval
+ * dataset), but it is not the answer's bibliography: retrieval routinely pulls
+ * a chunk from every document in the workspace, and the model cites a handful.
+ * Anything rendering "the sources for this answer" has to narrow the list to
+ * the markers present in the prose, and this is that narrowing.
+ *
+ * Scanning the raw string rather than the parsed AST means a `[1]` inside a
+ * code fence counts here while `remarkCitationMarkers` would leave it as
+ * literal text. That is a deliberate direction to be wrong in: the result is a
+ * superset of the rendered chips, so the failure mode is listing a source the
+ * reader cannot click back to - never dropping one they can.
+ */
+export function citedMarkers(text: string): Set<number> {
+  const markers = new Set<number>();
+  MARKER_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = MARKER_RE.exec(text)) !== null) {
+    markers.add(Number(match[1]));
+  }
+  return markers;
+}

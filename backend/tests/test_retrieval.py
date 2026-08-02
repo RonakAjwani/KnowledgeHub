@@ -28,7 +28,7 @@ from app.retrieval.fuse import (
     fuse_formulations,
     nested_rrf_max,
 )
-from app.retrieval.qdrant_store import QdrantStore
+from app.retrieval.qdrant_store import QdrantStore, _scope
 from app.retrieval.rerank import Reranker, RerankStatus, is_decisive
 
 
@@ -305,6 +305,53 @@ def test_nested_fusion_normalises_against_the_analytic_ceiling() -> None:
     assert out[0].fused_score == pytest.approx(1.0)
 
 
+def test_fusion_carries_match_quality_rather_than_rank() -> None:
+    """Regression, finding 7.1.
+
+    Being top of the list says nothing about matching well. When the fused score
+    was recomputed from rank, a barely-relevant chunk that happened to lead a
+    weak result set scored 1.0 and the abstention floor could never fire.
+    """
+    weak = [[candidate(1, fused=0.30)], [candidate(1, fused=0.28)]]
+    out = fuse_formulations(weak, k=60, rank_base=0, limit=10)
+    assert out[0].fused_score == pytest.approx(0.30), "best of the two, not 1.0"
+
+
+def test_self_fusion_leaves_the_score_untouched() -> None:
+    """Regression, finding 7.1 - the path the CRAG retry actually takes.
+
+    ``retry_node`` sets ``rewritten=True`` without changing the query, so the
+    corrective attempt fuses a result set with an identical copy of itself. That
+    must not move the score: the retry found nothing new, and the retry is the
+    path every unanswerable question takes on its way to ``abstain``.
+    """
+    one = [candidate(1, fused=0.50), candidate(2, fused=0.49), candidate(3, fused=0.30)]
+    out = fuse_formulations([one, list(one)], k=60, rank_base=0, limit=10)
+    assert [c.fused_score for c in out] == pytest.approx([0.50, 0.49, 0.30])
+
+
+def test_fusion_keeps_the_better_score_when_one_formulation_ranks_it_low() -> None:
+    """Best-of, matching the best-rank rule: a chunk one formulation found
+    strongly is not marked down because the other barely surfaced it."""
+    strong = [candidate(1, fused=0.90)]
+    weak = [candidate(2, fused=0.60), candidate(1, fused=0.05)]
+    out = fuse_formulations([strong, weak], k=60, rank_base=0, limit=10)
+    by_id = {c.chunk.id: c.fused_score for c in out}
+    assert by_id["c001"] == pytest.approx(0.90)
+
+
+def test_fusion_still_orders_by_reciprocal_rank_not_by_score() -> None:
+    """Ordering and magnitude are separate on purpose. Agreement across
+    formulations decides position even when a one-sided hit scores higher."""
+    raw = [candidate(1, fused=0.99), candidate(2, fused=0.40)]
+    rewritten = [candidate(3, fused=0.95), candidate(2, fused=0.40)]
+
+    out = fuse_formulations([raw, rewritten], k=60, rank_base=0, limit=10)
+
+    assert out[0].chunk.id == "c002", "found by both, so it leads on rank"
+    assert out[0].fused_score == pytest.approx(0.40), "and keeps its own magnitude"
+
+
 def test_nested_ceiling_matches_the_formula() -> None:
     assert nested_rrf_max(60, 0, 2) == pytest.approx(2 / 60)
     assert nested_rrf_max(60, 1, 2) == pytest.approx(2 / 61)
@@ -391,3 +438,159 @@ async def test_an_http_error_is_not_retried() -> None:
     with pytest.raises(UnexpectedResponse):
         await store._retrying("count", rejected)
     assert attempts == 1
+
+
+# ------------------------------------------------------------ scoping (I3 / workspaces)
+
+
+def _keys(f) -> list[str]:
+    return [c.key for c in f.must]
+
+
+def test_an_empty_document_selection_is_not_an_unrestricted_search() -> None:
+    """MEASURED, and the sharpest scoping bug found in the review: `_scope`
+    tested `if doc_ids:`, which is falsy for both `None` and `[]`, so the two
+    collapsed. `None` means "no document restriction"; `[]` means "restricted to
+    no documents" and can only return nothing.
+
+    `chat.py` builds that list from the conversation's workspace, so an **empty
+    workspace produced `[]`** - and a chat there retrieved a document belonging
+    to a different workspace, contradicting the promise written three lines
+    above that query. Verified against a live Qdrant before and after: 2 hits,
+    then 0.
+
+    I3 was never at risk - `user_id` is unconditional - so this was workspace
+    isolation, not tenant isolation. That distinction is why the bug survived: a
+    tenant leak would have been caught by the isolation tests that already
+    exist."""
+    unrestricted = _scope("u1", None)
+    empty = _scope("u1", [])
+    listed = _scope("u1", ["doc-a"])
+
+    assert _keys(unrestricted) == ["user_id"], "None must not narrow by document"
+    assert _keys(empty) == ["user_id", "doc_id"], "[] must narrow, and to nothing"
+    assert _keys(listed) == ["user_id", "doc_id"]
+    assert empty != unrestricted
+
+
+def test_every_scope_carries_user_id_whatever_the_selection(
+) -> None:
+    """I3 by construction: there is no argument to `_scope` that produces a
+    filter without the tenant predicate."""
+    for doc_ids in (None, [], ["a"], ["a", "b"]):
+        assert _keys(_scope("u1", doc_ids))[0] == "user_id"
+
+
+async def test_every_turn_after_the_breaker_trips_still_reports_degradation() -> None:
+    """I1 is about each *answer*, not each breaker.
+
+    MEASURED: the degradation was recorded only on the turn that tripped the
+    breaker. Turns 2, 3 and 4 carried none, so every answer for the rest of the
+    deployment was served on fused order while looking exactly like a reranked
+    one - I1's failure condition stated literally.
+
+    One record per answer is the correct rate, not spam. The breaker's job is to
+    stop the *calls*, and it still does: exactly one HTTP request is made."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(402, json={"message": "quota"})
+
+    settings = Settings(cohere_api_key="k", decisive_ratio=99.0)
+    reranker = Reranker(
+        settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+
+    for turn in range(4):
+        outcome = await reranker.rerank(
+            f"question {turn}", [candidate(0, 1.0), candidate(1, 0.9)]
+        )
+        assert outcome.status is RerankStatus.FAILED
+        assert len(outcome.degradations) == 1, (
+            f"turn {turn} was degraded silently - no record for the user to see"
+        )
+        assert outcome.degradations[0].reason is DegradationReason.QUOTA_EXHAUSTED
+
+    assert calls["n"] == 1, "the breaker must still prevent every call after the first"
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    [
+        ("empty results", {"results": []}),
+        ("renamed key", {"data": [{"index": 0, "relevance_score": 0.9}]}),
+        ("every index out of range", {"results": [{"index": 99, "relevance_score": 0.9}]}),
+        ("scores missing", {"results": [{"index": 0}]}),
+    ],
+)
+async def test_a_200_with_nothing_usable_is_a_failure_not_a_rerank(
+    label: str, body: dict
+) -> None:
+    """The quiet one. These all returned `status=APPLIED` with every
+    `rerank_score` None - so `grade` read scores from the rerank source, found an
+    empty list, scored the turn **0.0** and abstained. A good retrieval became "I
+    could not find that", with no degradation anywhere to explain it, and an
+    upstream response-shape change would have done that to every query at once.
+
+    Now it falls back to fused order and says so."""
+    settings = Settings(cohere_api_key="k", decisive_ratio=99.0)
+    reranker = Reranker(
+        settings,
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body))
+        ),
+    )
+    candidates = [candidate(0, 1.0), candidate(1, 0.9)]
+    outcome = await reranker.rerank("q", candidates)
+
+    assert outcome.status is RerankStatus.FAILED, label
+    assert outcome.degradations, f"{label} degraded with no record"
+    assert outcome.degradations[0].fallback == "fused order"
+    # The fused ordering survives intact rather than being replaced by nothing.
+    assert [c.chunk.id for c in outcome.candidates] == [c.chunk.id for c in candidates]
+
+
+async def test_an_unusable_response_is_not_cached() -> None:
+    """One malformed response used to poison that (query, doc-set) permanently:
+    the empty order was written to the cache, so every later identical query was
+    served from it as `CACHED` with no scores at all."""
+    settings = Settings(cohere_api_key="k", decisive_ratio=99.0)
+    bodies = [{"results": []}, {"results": [{"index": 0, "relevance_score": 0.8}]}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=bodies.pop(0) if bodies else {"results": []})
+
+    reranker = Reranker(
+        settings, client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    candidates = [candidate(0, 1.0), candidate(1, 0.9)]
+
+    first = await reranker.rerank("q", candidates)
+    assert first.status is RerankStatus.FAILED
+    assert reranker._cache == {}, "an unusable ordering must not be remembered"
+
+    # The identical query must reach Cohere again rather than replay the failure.
+    second = await reranker.rerank("q", candidates)
+    assert second.status is RerankStatus.APPLIED
+    assert second.candidates[0].rerank_score == 0.8
+
+
+def test_the_rerank_cache_is_bounded() -> None:
+    """It was unbounded - 50 distinct queries left 50 entries and nothing evicted.
+    Small entries make it a slow leak rather than a fast one, but unbounded inside
+    a 512 MB ceiling is still a leak, and the sibling prompt cache in
+    `app/llm/cache.py` is already bounded at the same size.
+
+    Exercised through `_remember` rather than through 500+ `rerank()` calls: the
+    reranker is rate limited to 10 rpm, so driving eviction end to end would take
+    the better part of an hour to assert one dict length."""
+    from app.retrieval.rerank import _CACHE_MAX_ENTRIES
+
+    reranker = Reranker(Settings(cohere_api_key="k"))
+    for i in range(_CACHE_MAX_ENTRIES + 25):
+        reranker._remember(f"key-{i}", [(f"c{i}", 0.9)])
+
+    assert len(reranker._cache) == _CACHE_MAX_ENTRIES
+    assert "key-0" not in reranker._cache, "the oldest entry must be the one evicted"
+    assert f"key-{_CACHE_MAX_ENTRIES + 24}" in reranker._cache, "the newest must survive"

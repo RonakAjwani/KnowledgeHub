@@ -28,11 +28,14 @@ import {
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 
-import { NewWorkspaceDialog } from "@/components/WorkspaceSidebar";
+import {
+  InlineDeleteConfirm,
+  NewWorkspaceDialog,
+} from "@/components/WorkspaceSidebar";
 import { useClickOutside } from "@/hooks/useClickOutside";
 import { useHasMounted } from "@/hooks/useHasMounted";
 import { usePinnedWorkspaces } from "@/hooks/usePinnedWorkspaces";
-import { useSessionToken } from "@/hooks/useSessionToken";
+import { useSessionTokenState } from "@/hooks/useSessionToken";
 import { useWorkspaceMutations } from "@/hooks/useWorkspaceMutations";
 import { api } from "@/lib/api";
 import { WORKSPACES_KEY } from "@/lib/queryKeys";
@@ -187,30 +190,22 @@ function WorkspaceCard({
       )}
 
       {confirmingDelete && (
-        <div
-          onClick={(event) => event.stopPropagation()}
-          className="mt-4 flex items-center gap-1.5 rounded-lg bg-red-50 py-1.5 pl-3 pr-1.5 dark:bg-red-950/30"
-        >
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-red-800 dark:text-red-200">
-            Delete this workspace?
-          </span>
-          <button
-            type="button"
-            onClick={() => {
+        // The sidebar's component rather than a second copy of the same
+        // markup. The two drifted apart on padding and radius while sharing
+        // the same one-line layout bug, and fixing it twice is how they drift
+        // again - a card and a sidebar row should not disagree about what a
+        // delete confirmation looks like.
+        <div onClick={(event) => event.stopPropagation()}>
+          <InlineDeleteConfirm
+            size="sm"
+            className="mt-4"
+            label="Delete this workspace?"
+            onConfirm={() => {
               setConfirmingDelete(false);
               onDelete();
             }}
-            className="shrink-0 rounded-md px-2.5 py-1 text-sm font-semibold text-red-700 hover:bg-red-100 dark:text-red-300 dark:hover:bg-red-900/50"
-          >
-            Delete
-          </button>
-          <button
-            type="button"
-            onClick={() => setConfirmingDelete(false)}
-            className="shrink-0 rounded-md px-2.5 py-1 text-sm text-zinc-500 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          >
-            Cancel
-          </button>
+            onCancel={() => setConfirmingDelete(false)}
+          />
         </div>
       )}
     </div>
@@ -218,7 +213,7 @@ function WorkspaceCard({
 }
 
 export function WorkspaceGrid() {
-  const getToken = useSessionToken();
+  const { getToken, isLoaded, isSignedIn } = useSessionTokenState();
   const router = useRouter();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -231,6 +226,10 @@ export function WorkspaceGrid() {
   const workspacesQuery = useQuery({
     queryKey: WORKSPACES_KEY,
     queryFn: async () => api.listWorkspaces(await getToken()),
+    // See WorkspaceSidebar's identical guard: firing before Clerk has
+    // hydrated a session gets a token the backend rejects as expired, which
+    // is a mount-time race rather than a real expiry.
+    enabled: isLoaded && isSignedIn,
   });
   const { renameMutation, deleteMutation } = useWorkspaceMutations();
   const { pinned, toggle: togglePin } = usePinnedWorkspaces();
@@ -241,7 +240,13 @@ export function WorkspaceGrid() {
   // WorkspaceSidebar's identical race, since this page is server-rendered
   // the same way.
   const hasMounted = useHasMounted();
-  const showLoading = !hasMounted || workspacesQuery.isLoading;
+  // `isLoading` is `isPending && isFetching`, and a query disabled by
+  // `enabled: isLoaded && isSignedIn` never starts fetching - so on its own
+  // `isLoading` would read `false` while still waiting on Clerk, and the page
+  // would flash the "no workspaces yet" empty state instead of a loading one.
+  // `isPending` alone covers both "waiting on Clerk" and "waiting on the
+  // request" without that gap.
+  const showLoading = !hasMounted || workspacesQuery.isPending;
 
   const workspaces = useMemo(() => {
     const all = workspacesQuery.data ?? [];

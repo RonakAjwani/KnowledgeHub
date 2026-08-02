@@ -204,6 +204,136 @@ def _split_table(
     return pieces
 
 
+def _enforce_ceiling(
+    doc: NormalizedDocument, pieces: list[_Piece], max_tokens: int
+) -> list[_Piece]:
+    """Hard-split any piece still over the child ceiling.
+
+    MEASURED, and the reason this is not redundant with the two splitters above:
+    both divide on a natural boundary and neither can divide a unit larger than
+    the ceiling. `_split_prose` keys on `.!?` followed by whitespace, and its
+    packing loop takes the first sentence unconditionally (`if cur_tokens and
+    ...`), so one oversized sentence becomes one oversized chunk; with no
+    boundary anywhere in the block it falls back to the whole block as a single
+    "sentence". `_split_table` has the same shape for a single huge row.
+
+    Real documents hit this. Unpunctuated prose produced a 1,057-token child and
+    CJK text - which terminates sentences with 。, not `.` - produced 2,906,
+    against an embedding model that accepts **512**. Nothing errors: fastembed
+    truncates, so the dense vector describes the opening of the chunk and the
+    remainder is unreachable by the dense branch while BM25 still indexes all of
+    it. The failure is a quiet recall hole, which is the worst kind.
+    """
+    out: list[_Piece] = []
+    for piece in pieces:
+        out.extend(_hard_split(doc, piece, max_tokens))
+    return out
+
+
+def _hard_split(
+    doc: NormalizedDocument, piece: _Piece, max_tokens: int
+) -> list[_Piece]:
+    """Cut a piece into ceiling-sized parts at whitespace, ignoring semantics.
+
+    A last resort with no pretence otherwise: there is no sentence to respect
+    here, and a chunk the embedder silently truncates is worse than one cut at
+    an arbitrary word. Falls back to a hard character cut when the text has no
+    whitespace at all (a base64 blob, an unbroken CJK run), because at that
+    point any cut is arbitrary and the only wrong answer is not cutting.
+    """
+    text = doc.text[piece.start : piece.end]
+    if count_tokens(text) <= max_tokens:
+        return [piece]
+
+    density = len(text) / max(1, count_tokens(text))
+    step = max(1, int(max_tokens * density))
+
+    out: list[_Piece] = []
+    cursor = piece.start
+    while cursor < piece.end:
+        cut = min(piece.end, cursor + step)
+
+        if cut < piece.end:
+            probe, budget = cut, 64
+            while budget and probe > cursor + 1 and not doc.text[probe].isspace():
+                probe -= 1
+                budget -= 1
+            if probe > cursor + 1:
+                cut = probe
+
+        # Verify rather than trust the density estimate; shrink if it ran high.
+        guard = 0
+        while (
+            guard < 4
+            and cut - cursor > 1
+            and count_tokens(doc.text[cursor:cut]) > max_tokens
+        ):
+            cut = cursor + max(1, (cut - cursor) * 3 // 4)
+            guard += 1
+
+        out.append(_Piece(cursor, cut, piece.span))
+        cursor = cut
+    return out
+
+
+def _snap_to_word(text: str, offset: int, *, lower: int, upper: int, inward: int) -> int:
+    """Move ``offset`` to the nearest word boundary, shrinking the window.
+
+    Always shrinks rather than grows: a window that starts mid-word feeds the
+    model a fragment, and growing to fix it could re-breach the budget the
+    caller just satisfied. Bounded so a long unbroken run (a URL, a base64
+    blob, CJK text with no spaces) cannot make this scan far.
+    """
+    limit = 48
+    while limit and lower < offset < upper and not text[offset - 1].isspace():
+        offset += inward
+        limit -= 1
+    return max(lower, min(upper, offset))
+
+
+def _bounded_window(
+    doc: NormalizedDocument,
+    piece: _Piece,
+    block: BlockSpan,
+    max_tokens: int,
+) -> tuple[int, int]:
+    """A parent for a child whose own block is already over the budget.
+
+    Centred on the child and grown outward *within the block* until the budget
+    is spent, rather than taking the whole block. The child is always contained,
+    even if it alone exceeds the cap - a parent that omits the cited span breaks
+    the source-pane scroll target.
+
+    Sized by this block's own character density rather than by growing a token
+    count in a loop: the loop would be one `count_tokens` call per step over a
+    block that is by definition large, and this runs per chunk. The estimate is
+    then verified and shrunk, so density being off costs accuracy, never the
+    ceiling.
+    """
+    start, end = piece.start, piece.end
+    child_tokens = count_tokens(doc.text[start:end])
+    if child_tokens >= max_tokens:
+        return start, end
+
+    body = block.slice(doc.text)
+    density = len(body) / max(1, count_tokens(body))
+    spare = int((max_tokens - child_tokens) * density) // 2
+
+    new_start = max(block.start, start - spare)
+    new_end = min(block.end, end + spare)
+
+    # Verify against the real counter and pull in if the estimate ran high.
+    for _ in range(4):
+        if count_tokens(doc.text[new_start:new_end]) <= max_tokens:
+            break
+        new_start += (start - new_start) // 2
+        new_end -= (new_end - end) // 2
+
+    new_start = _snap_to_word(doc.text, new_start, lower=block.start, upper=start, inward=1)
+    new_end = _snap_to_word(doc.text, new_end, lower=end, upper=block.end, inward=-1)
+    return min(new_start, start), max(new_end, end)
+
+
 def _parent_window(
     doc: NormalizedDocument,
     piece: _Piece,
@@ -224,6 +354,18 @@ def _parent_window(
         return piece.start, piece.end
 
     section = piece.span.section
+    # The window starts at the child's own *block*, and that is only safe while
+    # the block fits the budget. A block bigger than `max_tokens` made every
+    # parent in it the entire block - the growth loop below never runs, but the
+    # starting value is already over. MEASURED on a 54 KB single-section
+    # document: 41 of 42 parents breached the 1200-token ceiling and the largest
+    # was ~10,400 tokens, 8.7x the cap. That is the string handed to the model,
+    # so `fit_context` then trimmed the turn down to roughly one source instead
+    # of five - a quality collapse that only appears once a section exceeds the
+    # ceiling, which is to say on real documents and not on a short demo corpus.
+    if count_tokens(spans[index].slice(doc.text)) > max_tokens:
+        return _bounded_window(doc, piece, spans[index], max_tokens)
+
     start, end = spans[index].start, spans[index].end
     tokens = count_tokens(doc.text[start:end])
 
@@ -402,6 +544,11 @@ def chunk_document(
         else:
             pieces, consumed = _packed_prose(doc, doc.spans, position, child_max)
             table_header = ""
+
+        # Both splitters divide on a *natural* boundary - a sentence, a table
+        # row - and neither can divide a unit that is itself over the ceiling.
+        # This is the backstop for text that offers no such boundary.
+        pieces = _enforce_ceiling(doc, pieces, child_max)
 
         # Which captioned object this block belongs to - its own caption if it
         # has one, otherwise an adjacent caption block.

@@ -75,8 +75,36 @@ const SHARED_VARIABLES = {
   // email + password fields, submit, footer - fits AuthShell's single-page,
   // no-scroll layout. Documented at
   // https://clerk.com/docs/nextjs/guides/customizing-clerk/appearance-prop/variables
+  //
+  // This scales Clerk's *box* metrics and not its type: font sizes come off a
+  // separate `fontSize` variable. Anything Clerk sizes to fit its text at the
+  // default 1rem therefore ends up ~30% too short for that text here, and
+  // `lastAuthenticationStrategyBadge` below is the element with no slack to
+  // absorb it. Raising this back to 1rem is the other fix and is rejected -
+  // it puts the sign-up card back into a scroll.
   spacing: "0.7rem",
 } as const;
+
+/**
+ * The "Last used" pill on whichever sign-in option the visitor picked last.
+ *
+ * MEASURED against the live form (its element descriptor is
+ * `lastAuthenticationStrategyBadge`, read out of the installed
+ * `@clerk/ui@1.27.2` bundle's own descriptor list - it is not in the docs'
+ * elements table): Clerk gives it a hard `height` derived from `spacing`,
+ * which at 0.7rem resolves to 14.17px, and `display: block` with no vertical
+ * padding. Its text line box is 15px tall (12.375px type on an 18px root), so
+ * the label overhung the pill's bottom edge by 2.8px - `scrollHeight` 18
+ * against `clientHeight` 12.
+ *
+ * `h-auto` drops the inherited fixed height so the box is sized by its
+ * content, and `inline-flex` + `items-center` centres the label in it rather
+ * than letting a line box taller than the container decide where the text
+ * sits. `!` on each for the reason documented on `cardBox` below: Clerk's
+ * `cl-internal-*` classes tie with a utility on specificity and win on order.
+ */
+const LAST_USED_BADGE =
+  "inline-flex! h-auto! items-center px-2! py-1! leading-none!";
 
 const LIGHT_APPEARANCE = {
   variables: {
@@ -134,6 +162,7 @@ const LIGHT_APPEARANCE = {
     socialButtonsBlockButton:
       "border-zinc-300 hover:bg-zinc-100 text-zinc-800 rounded-lg",
     socialButtonsBlockButtonText: "text-sm font-medium",
+    lastAuthenticationStrategyBadge: LAST_USED_BADGE,
     dividerLine: "bg-zinc-200",
     dividerText: "text-zinc-500",
     identityPreviewEditButton: "text-zinc-900 underline underline-offset-2",
@@ -173,6 +202,7 @@ const DARK_APPEARANCE = {
     socialButtonsBlockButton:
       "border-zinc-800 hover:bg-zinc-800 text-zinc-200 rounded-lg",
     socialButtonsBlockButtonText: "text-sm font-medium",
+    lastAuthenticationStrategyBadge: LAST_USED_BADGE,
     dividerLine: "bg-zinc-800",
     dividerText: "text-zinc-400",
     identityPreviewEditButton: "text-zinc-100 underline underline-offset-2",
